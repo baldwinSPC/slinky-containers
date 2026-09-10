@@ -161,7 +161,7 @@ function main() {
 	fi
 
 	# Ref: https://slurm.schedmd.com/topology.html#dynamic_topo
-	if [ -n "$POD_TOPOLOGY" ]; then
+	if [ -n "${POD_TOPOLOGY//[[:space:]]/}" ]; then
 		addConfItem "Topology=${POD_TOPOLOGY}"
 	fi
 
