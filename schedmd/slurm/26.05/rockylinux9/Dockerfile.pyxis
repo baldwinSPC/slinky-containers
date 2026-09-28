@@ -83,6 +83,9 @@ mkdir pyxis
 tar -zxvf pyxis.tar.gz -C pyxis --strip-components=1
 cd pyxis
 make rpm
+# make rpm writes under pyxis/rpm/RPMS/<arch>/, which the COPY of /tmp/*.rpm
+# below does not reach.
+find /tmp/pyxis/rpm/RPMS -name '*.rpm' -exec cp -t /tmp/ {} +
 EOR
 
 ################################################################################
@@ -95,7 +98,6 @@ ARG PYXIS_VERSION
 ENV PYXIS_VERSION="${PYXIS_VERSION}"
 
 COPY --from=download /tmp/*.rpm ./
-COPY --from=download /tmp/**/*.rpm ./
 COPY --from=download /etc/enroot/hooks.d/* /etc/enroot/hooks.d/
 COPY --from=download /usr/share/bash-completion/completions/* /usr/share/bash-completion/completions/
 
@@ -112,10 +114,16 @@ dnf -q -y install --setopt='install_weak_deps=False' \
   fuse-overlayfs pigz squashfuse \
   ./*.rpm
 rm *.rpm
+for f in /usr/lib64/slurm/spank_pyxis.so /usr/share/pyxis/pyxis.conf; do
+  if [ ! -f "${f}" ]; then
+    echo "pyxis is not installed: ${f} is missing" >&2
+    exit 1
+  fi
+done
 # Configure
 mkdir -m 777 -p /usr/share/enroot/enroot-data/
 mkdir -m 755 -p /run/enroot/
-mkdir -m 644 -p /etc/slurm/plugstack.conf.d/
+mkdir -m 755 -p /etc/slurm/plugstack.conf.d/
 ln -s /usr/share/pyxis/pyxis.conf /etc/slurm/plugstack.conf.d/pyxis.conf
 EOR
 
@@ -141,7 +149,6 @@ ARG PYXIS_VERSION
 ENV PYXIS_VERSION="${PYXIS_VERSION}"
 
 COPY --from=download /tmp/*.rpm ./
-COPY --from=download /tmp/**/*.rpm ./
 COPY --from=download /etc/enroot/hooks.d/* /etc/enroot/hooks.d/
 COPY --from=download /usr/share/bash-completion/completions/* /usr/share/bash-completion/completions/
 
@@ -158,10 +165,16 @@ dnf -q -y install --setopt='install_weak_deps=False' \
   fuse-overlayfs pigz squashfuse \
   ./*.rpm
 rm *.rpm
+for f in /usr/lib64/slurm/spank_pyxis.so /usr/share/pyxis/pyxis.conf; do
+  if [ ! -f "${f}" ]; then
+    echo "pyxis is not installed: ${f} is missing" >&2
+    exit 1
+  fi
+done
 # Configure
 mkdir -m 777 -p /usr/share/enroot/enroot-data/
 mkdir -m 755 -p /run/enroot/
-mkdir -m 644 -p /etc/slurm/plugstack.conf.d/
+mkdir -m 755 -p /etc/slurm/plugstack.conf.d/
 ln -s /usr/share/pyxis/pyxis.conf /etc/slurm/plugstack.conf.d/pyxis.conf
 EOR
 
