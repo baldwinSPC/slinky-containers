@@ -7,6 +7,8 @@
 #
 # usage: release-notes.sh INDEXES_FILE
 #   INDEXES_FILE has one "image index-digest amd64-digest arm64-digest" line per image.
+#   Test records are read from sbom/test-*.txt (before the push) and
+#   digests/test-*-pushed.txt (the pushed digests) beside it.
 # Environment: REGISTRY, SLURM_TAG, GITHUB_SHA, GITHUB_SERVER_URL, GITHUB_REPOSITORY.
 
 set -euo pipefail
@@ -90,7 +92,7 @@ Tags \`${SLURM_TAG}\` and \`${SLURM_TAG%.*}-rockylinux9\` pointed at these index
 ## Checks
 
 EOF
-for f in "$(dirname "$indexes")"/sbom/test-*.txt; do
+for f in "$(dirname "$indexes")"/sbom/test-*.txt "$(dirname "$indexes")"/digests/test-*-pushed.txt; do
 	[[ -e $f ]] || continue
 	echo "- \`$(basename "$f" .txt)\`: $(grep -E '^executed=' "$f" | tail -n1)"
 done
