@@ -1,5 +1,20 @@
 # Slinky Containers
 
+> [!NOTE]
+> This is baldwinSPC's fork of
+> [SlinkyProject/containers](https://github.com/SlinkyProject/containers). It
+> adds GPU-capable `slurmd` images, `slurmd_gpu` and `slurmd_gpu_pyxis`, built
+> with NVML (linux/amd64 and linux/arm64) and ROCm SMI (linux/amd64), so
+> `gres.conf` can use `AutoDetect=nvml` and `AutoDetect=rsmi`. They are
+> published to `ghcr.io/baldwinspc/slinky-containers` and are not SchedMD's. See
+> [NOTICE-GPU.md](./NOTICE-GPU.md) for their licences and sources.
+>
+> ```sh
+> cd ./schedmd/slurm/
+> docker buildx bake --file ./docker-bake.hcl --file ./26.05/rockylinux9/slurm.hcl \
+>   --file ./26.05/rockylinux9/gpu.hcl gpu
+> ```
+
 [SchedMD] provides the images in the containers repository primarily for use
 with [Slinky] - to enable the orchestration of [Slurm] clusters using
 [Kubernetes]. These [OCI] container images track [Slurm] releases closely.

@@ -1,0 +1,10 @@
+6749195e37e3a98071ec349884900b12de7677332599da0fd5d8afb5bed9233c  tmp/enroot-4.2.1-1.el8.x86_64.rpm
+6b6bc2526f0f0daa7d3cebe6dd33c0468b209e81eebd92def5777520042ec6fe  tmp/enroot-4.2.1-1.el8.aarch64.rpm
+56321a03a1f6c4e4273bf664917eb9a174714499d5506c498db4b64275a2b9c0  tmp/enroot+caps-4.2.1-1.el8.x86_64.rpm
+38cf9ae9602a9a8c3e94637bc1b34e736e8176bda656ba71d371f5e1d1e1eed9  tmp/enroot+caps-4.2.1-1.el8.aarch64.rpm
+9c4cdb79a67301d8ea05951aa4d2c205f40cf6145e338214b0191add8b36d6c4  tmp/pyxis.tar.gz
+2fc21870f5dedcaac53c66aa11e87b24688334a1cc1b21b242618892e6a9f8fb  usr/share/bash-completion/completions/enroot
+a641f4ecea935c4d18b4031b9e3f67b7874c11e8d0e80cace62bba4782a4eacd  etc/enroot/hooks.d/50-mig-config.sh
+e05100e6166076e270442250739447784dc65d842c47e0a72168a9baaed36f21  etc/enroot/hooks.d/50-sharp.sh
+aaf285d581d732d21f76b8752976dd7779335e35656808af689ec4af40042f68  etc/enroot/hooks.d/50-slurm-pmi.sh
+3118afb2b7743eaaafb7e3a59a9459a8bd4e55a93217bd5b0c571ce9729d227d  etc/enroot/hooks.d/50-slurm-pytorch.sh
