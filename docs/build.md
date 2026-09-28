@@ -14,6 +14,7 @@
   - [Multiple Architectures](#multiple-architectures)
     - [Emulation (QEMU)](#emulation-qemu)
     - [Multiple Native Nodes](#multiple-native-nodes)
+  - [GPU Autodetection](#gpu-autodetection)
   - [Extending the images with additional software](#extending-the-images-with-additional-software)
 
 <!-- mdformat-toc end -->
@@ -173,6 +174,34 @@ export BAKE_IMPORTS="--file ./docker-bake.hcl --file ./$VERSION/$FLAVOR/slurm.hc
 docker bake $BAKE_IMPORTS --builder multiarch multiarch --print
 docker bake $BAKE_IMPORTS --builder multiarch multiarch
 ```
+
+## GPU Autodetection
+
+The published `slurmd` images carry the `gpu/nvidia` autodetect plugin, which
+needs no library, and not `gpu/nvml` or `gpu/rsmi`. The `gpu` group builds
+`slurmd_gpu` and `slurmd_gpu_pyxis` with those two, so that `gres.conf` can use
+`AutoDetect=nvml` and `AutoDetect=rsmi`. Only the `rockylinux9` flavor of 26.05
+defines the `slurmd-gpu` stage.
+
+```sh
+cd ./schedmd/slurm/
+export BAKE_IMPORTS="--file ./docker-bake.hcl --file ./26.05/rockylinux9/slurm.hcl"
+docker bake $BAKE_IMPORTS gpu --print
+docker bake $BAKE_IMPORTS gpu
+```
+
+The plugins built per architecture come from the `GPU_AUTODETECT_AMD64` and
+`GPU_AUTODETECT_ARM64` build arguments. By default amd64 gets `nvml rsmi` and
+arm64 gets `nvml`, because ROCm publishes no arm64 packages. The build fails if
+a requested plugin is not in the Slurm package it produces.
+
+- **NVML:** the headers and link stub come from the CUDA repository's
+  `cuda-nvml-devel` package (`CUDA_NVML_DEVEL`) and are used at build time only.
+  Slurm loads `libnvidia-ml.so.1` at run time, and the NVIDIA container toolkit
+  mounts it into GPU containers from the node's driver.
+- **ROCm SMI:** `rocm-smi-lib` (`ROCM_SMI_LIB`, from ROCm `ROCM_VERSION`) is
+  installed in the image, because the AMD device plugin mounts only `/dev/kfd`
+  and `/dev/dri`.
 
 ## Extending the images with additional software
 
