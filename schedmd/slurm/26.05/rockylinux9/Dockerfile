@@ -76,9 +76,12 @@ dnf -y builddep \
   -D '_enable_debug 1' \
   ${SLURM_RPM_DIR}/slurm.spec >/dev/null
 ## FIXME: remove package installations after RPM spec makes them dependencies: --with-hdf5
+# lz4-devel: configure builds compress_lz4 (sbcast --compress=lz4) when it finds lz4.
 dnf -q -y install --setopt='install_weak_deps=False' \
-  hdf5-devel
-rpmbuild -ta --with slurmrestd --with jwt ${SLURM_RPM_DIR}.tar.bz2 >/dev/null
+  hdf5-devel lz4-devel
+# --with pmix: builddep above installs pmix-devel for '_with_pmix', but configure
+# leaves mpi/pmix out unless rpmbuild passes it too.
+rpmbuild -ta --with slurmrestd --with jwt --with pmix ${SLURM_RPM_DIR}.tar.bz2 >/dev/null
 EOR
 
 ################################################################################
