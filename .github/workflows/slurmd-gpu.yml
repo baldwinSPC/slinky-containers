@@ -80,6 +80,9 @@ jobs:
       - name: Test the SBOM licence join
         run: hack/gpu/sbom_test.sh
 
+      - name: Test the GPU count verdicts
+        run: hack/gpu/test-image_test.sh
+
       - name: Build the NVML test stub
         run: |
           docker buildx build --platform '${{ matrix.platform }}' \
@@ -114,6 +117,21 @@ jobs:
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu_pyxis-${{ matrix.arch }}.txt"
+
+      # The runner has no AMD GPU: rsmi detects and registers 0, and a count of
+      # 1 fails on count/rsmi alone.
+      - name: GPU count with no GPU
+        if: matrix.arch == 'amd64'
+        run: |
+          hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu:${SLURM_TAG}" \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --gpu-count rsmi=0
+          out="$(hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu:${SLURM_TAG}" \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --gpu-count rsmi=1 || true)"
+          echo "$out"
+          failed="$(sed -n 's/^FAIL \([^:]*\):.*/\1/p' <<<"$out" | tr '\n' ' ')"
+          echo "failed: [${failed}]"
+          [[ $failed == "count/rsmi " ]]
+          grep -qE '^executed=([0-9]+) planned=\1 passed=[0-9]+ failed=1$' <<<"$out"
 
       # Upstream's rockylinux9 slurmd has no gpu_nvml or gpu_rsmi, no mpi_pmix,
       # no compress_lz4 and no Slurm licence file; its slurmd-pyxis has no pyxis
