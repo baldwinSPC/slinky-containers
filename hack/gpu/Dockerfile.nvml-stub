@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: Apache-2.0
+#
+# The CUDA toolkit's link stub for NVML, for tests only: every entry point
+# exists and none of them reach a driver. Export it with
+#   docker buildx build -f hack/gpu/Dockerfile.nvml-stub --output type=local,dest=DIR hack/gpu
+# It is never part of a published image.
+
+ARG PARENT_IMAGE=rockylinux/rockylinux:9
+ARG CUDA_NVML_DEVEL=cuda-nvml-devel-12-9-12.9.79-1
+ARG CUDA_HOME=/usr/local/cuda-12.9
+
+FROM ${PARENT_IMAGE} AS stub
+
+SHELL ["bash", "-c"]
+
+ARG TARGETARCH
+ARG CUDA_NVML_DEVEL
+ARG CUDA_HOME
+
+RUN <<EOR
+set -xeuo pipefail
+case "${TARGETARCH}" in
+amd64) CUDA_REPO_ARCH=x86_64 ;;
+arm64) CUDA_REPO_ARCH=sbsa ;;
+*) echo "no CUDA repository for ${TARGETARCH}" >&2; exit 1 ;;
+esac
+dnf -q -y install 'dnf-command(config-manager)'
+dnf -q config-manager --add-repo "https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${CUDA_REPO_ARCH}/cuda-rhel9.repo"
+dnf -q -y install --setopt='install_weak_deps=False' "${CUDA_NVML_DEVEL}"
+mkdir -p /out
+cp "${CUDA_HOME}/lib64/stubs/libnvidia-ml.so" /out/libnvidia-ml.so.1
+EOR
+
+FROM scratch
+COPY --from=stub /out/ /

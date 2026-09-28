@@ -1,0 +1,274 @@
+---
+# Builds and checks the slurmd_gpu and slurmd_gpu_pyxis images on native amd64
+# and arm64 runners. Publishing is a manual run on main with publish=true: the
+# images are pushed by digest, the pushed digests are checked again, and only
+# then does the multi-platform index get its tags.
+name: slurmd-gpu
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/slurmd-gpu.yml
+      - hack/gpu/**
+      - schedmd/slurm/docker-bake.hcl
+      - schedmd/slurm/26.05/rockylinux9/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/slurmd-gpu.yml
+      - hack/gpu/**
+      - schedmd/slurm/docker-bake.hcl
+      - schedmd/slurm/26.05/rockylinux9/**
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push to ghcr.io and tag the multi-platform index (main only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slurmd-gpu-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io/baldwinspc/slinky-containers
+  SLURM_TAG: 26.05.4-rockylinux9
+  SLURM_MINOR_TAG: 26.05-rockylinux9
+  PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
+  PARENT_IMAGE: rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f
+  # The 26.05-ubuntu26.04 images slurm-operator v1.2.2's chart defaults to, at the
+  # digests the Slurm cluster pins: slurmd_gpu must run the same Slurm release
+  # and carry every plugin slurmd loads from the image it replaces.
+  STOCK_SLURMD: ghcr.io/slinkyproject/slurmd@sha256:f06ab7b1ce18b3d59c54c8c6f6b03698a28973d4d8fb30985bd0dfd673bd6dd9
+  STOCK_SLURMCTLD: ghcr.io/slinkyproject/slurmctld@sha256:e5fa6666bd890f522a23cd292d17e57438f08260aaffd5aed652c0c6cf29687c
+  # Upstream's 26.05-rockylinux9 builds of the same Dockerfiles without this
+  # fork's changes: the tests must fail there.
+  CONTROL_SLURMD: ghcr.io/slinkyproject/slurmd@sha256:4b9df5b286f30a61eef62659ab62eba0809a6548a554640bb44998a12f987bad
+  CONTROL_SLURMD_PYXIS: ghcr.io/slinkyproject/slurmd-pyxis@sha256:ceaba4e9e8e8fa2d003e01a681eb588341a1782f177cf1d9f3a9a3f9d19efd1d
+
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+            # ROCm publishes no arm64 packages, so only amd64 carries rsmi.
+            expect: nvml rsmi
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            expect: nvml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the NVML test stub
+        run: |
+          docker buildx build --platform '${{ matrix.platform }}' \
+            --build-arg "PARENT_IMAGE=${PARENT_IMAGE}" \
+            --file hack/gpu/Dockerfile.nvml-stub \
+            --output "type=local,dest=${RUNNER_TEMP}/nvml-stub" hack/gpu
+          file "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1"
+
+      - name: Build
+        working-directory: schedmd/slurm
+        env:
+          REGISTRY: local/slinky
+          GIT_REVISION: ${{ github.sha }}
+        run: |
+          docker buildx bake \
+            --file docker-bake.hcl --file 26.05/rockylinux9/slurm.hcl --file 26.05/rockylinux9/gpu.hcl \
+            --set '*.platform=${{ matrix.platform }}' --load --progress=plain \
+            slurmd_gpu slurmd_gpu_pyxis
+
+      - name: Test slurmd_gpu
+        run: |
+          hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu:${SLURM_TAG}" \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' \
+            --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
+            --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+            --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu.txt"
+
+      - name: Test slurmd_gpu_pyxis
+        run: |
+          hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu_pyxis:${SLURM_TAG}" \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis \
+            --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
+            --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+            --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu_pyxis.txt"
+
+      # Upstream's rockylinux9 slurmd has no gpu_nvml or gpu_rsmi, no mpi_pmix,
+      # no compress_lz4 and no Slurm licence file; its slurmd-pyxis has no pyxis
+      # in it.
+      - name: Control, upstream slurmd:26.05-rockylinux9
+        run: |
+          hack/gpu/control.sh --image "${CONTROL_SLURMD}" \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' \
+            --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
+            --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+            --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm
+
+      - name: Control, upstream slurmd-pyxis:26.05-rockylinux9
+        run: |
+          hack/gpu/control.sh --image "${CONTROL_SLURMD_PYXIS}" \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis \
+            --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
+            --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+            --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
+            --also-fail pyxis/plugin --also-fail pyxis/plugstack --also-fail pyxis/enroot
+
+      - name: SBOM
+        run: |
+          mkdir -p "${RUNNER_TEMP}/sbom"
+          for image in slurmd_gpu slurmd_gpu_pyxis; do
+            hack/gpu/sbom.sh --image "local/slinky/${image}:${SLURM_TAG}" --platform '${{ matrix.platform }}' \
+              >"${RUNNER_TEMP}/sbom/${image}-${{ matrix.arch }}.tsv"
+            hack/gpu/sbom.sh --image "local/slinky/${image}:${SLURM_TAG}" --platform '${{ matrix.platform }}' \
+              --baseline "${CONTROL_SLURMD}" >"${RUNNER_TEMP}/sbom/${image}-${{ matrix.arch }}-added-over-upstream.tsv"
+          done
+          cp "${RUNNER_TEMP}"/test-*.txt "${RUNNER_TEMP}/sbom/"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ matrix.arch }}
+          path: ${{ runner.temp }}/sbom/
+
+      - name: Log in to ghcr.io
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push by digest
+        if: env.PUBLISH == 'true'
+        working-directory: schedmd/slurm
+        env:
+          GIT_REVISION: ${{ github.sha }}
+        run: |
+          docker buildx bake \
+            --file docker-bake.hcl --file 26.05/rockylinux9/slurm.hcl --file 26.05/rockylinux9/gpu.hcl \
+            --set '*.platform=${{ matrix.platform }}' \
+            --set "slurmd_gpu.tags=${REGISTRY}/slurmd_gpu" \
+            --set "slurmd_gpu_pyxis.tags=${REGISTRY}/slurmd_gpu_pyxis" \
+            --set '*.output=type=image,push-by-digest=true,name-canonical=true,push=true' \
+            --provenance=mode=max --sbom=true \
+            --metadata-file "${RUNNER_TEMP}/metadata.json" --progress=plain \
+            slurmd_gpu slurmd_gpu_pyxis
+          mkdir -p "${RUNNER_TEMP}/digests"
+          for image in slurmd_gpu slurmd_gpu_pyxis; do
+            digest="$(jq -r --arg t "$image" '.[$t]["containerimage.digest"]' "${RUNNER_TEMP}/metadata.json")"
+            echo "${image} ${{ matrix.platform }} ${digest}"
+            echo "${digest}" >"${RUNNER_TEMP}/digests/${image}-${{ matrix.arch }}"
+          done
+
+      # What was pushed is what gets tagged, so it is checked again from the registry.
+      - name: Test the pushed images
+        if: env.PUBLISH == 'true'
+        run: |
+          for image in slurmd_gpu slurmd_gpu_pyxis; do
+            pyxis=()
+            [[ $image == slurmd_gpu_pyxis ]] && pyxis=(--pyxis)
+            hack/gpu/test-image.sh --image "${REGISTRY}/${image}@$(cat "${RUNNER_TEMP}/digests/${image}-${{ matrix.arch }}")" \
+              --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' "${pyxis[@]}" \
+              --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
+              --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+              --plugins-of "${STOCK_SLURMD}"
+          done
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: env.PUBLISH == 'true'
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/
+
+  publish:
+    name: publish
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digests-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sbom-*
+          path: ${{ runner.temp }}/sbom
+          merge-multiple: true
+
+      - name: Tag the multi-platform indexes
+        run: |
+          : >"${RUNNER_TEMP}/indexes"
+          for image in slurmd_gpu slurmd_gpu_pyxis; do
+            amd64="$(cat "${RUNNER_TEMP}/digests/${image}-amd64")"
+            arm64="$(cat "${RUNNER_TEMP}/digests/${image}-arm64")"
+            docker buildx imagetools create \
+              --tag "${REGISTRY}/${image}:${SLURM_TAG}" --tag "${REGISTRY}/${image}:${SLURM_MINOR_TAG}" \
+              "${REGISTRY}/${image}@${amd64}" "${REGISTRY}/${image}@${arm64}"
+            index="$(docker buildx imagetools inspect "${REGISTRY}/${image}:${SLURM_TAG}" --format '{{json .Manifest}}' | jq -r .digest)"
+            echo "${image} ${index} ${amd64} ${arm64}" | tee -a "${RUNNER_TEMP}/indexes"
+          done
+
+      - name: Architecture guard
+        run: |
+          while read -r image index _ _; do
+            hack/gpu/arch-guard.sh "${REGISTRY}/${image}@${index}" linux/amd64 linux/arm64
+          done <"${RUNNER_TEMP}/indexes"
+
+      # The Slurm source the images were built from travels with them (GPL-2.0).
+      - name: Fetch the Slurm source
+        run: |
+          flavor=schedmd/slurm/26.05/rockylinux9
+          version="$(sed -n -E 's/^slurm_version = "(.*)"/\1/p' "${flavor}/slurm.hcl")"
+          sha256="$(sed -n -E 's/^[[:space:]]*SLURM_SHA256 = "(.*)"/\1/p' "${flavor}/gpu.hcl")"
+          archive="slurm-${version//./-}-1.tar.gz"
+          curl -fsSL --retry 5 -o "${RUNNER_TEMP}/${archive}" "https://github.com/SchedMD/slurm/archive/${archive}"
+          echo "${sha256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="gpu-${SLURM_TAG}.${{ github.run_number }}"
+          hack/gpu/release-notes.sh "${RUNNER_TEMP}/indexes" >"${RUNNER_TEMP}/notes.md"
+          cat "${RUNNER_TEMP}/notes.md" >>"${GITHUB_STEP_SUMMARY}"
+          gh release create "$tag" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "slurmd_gpu ${SLURM_TAG} (run ${{ github.run_number }})" \
+            --notes-file "${RUNNER_TEMP}/notes.md" \
+            "${RUNNER_TEMP}"/sbom/*.tsv "${RUNNER_TEMP}"/sbom/*.txt "${RUNNER_TEMP}"/slurm-*.tar.gz
