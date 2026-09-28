@@ -8,13 +8,16 @@ ARG SLURM_VERSION=26.05.4
 ARG SLURM_VERSION_ARCHIVE=slurm-26-05-4-1
 ARG SLURM_DIR=slurm
 ARG PARENT_IMAGE=rockylinux/rockylinux:9
+ARG ALPINE_IMAGE=alpine:latest
 
 ################################################################################
-FROM alpine:latest AS slurm-src
+FROM ${ALPINE_IMAGE} AS slurm-src
 
 ARG SLURM_VERSION_ARCHIVE
 ARG SLURM_DIR
 ARG SLURM_TAR="${SLURM_VERSION_ARCHIVE}.tar.gz"
+# When set, the archive must match this sha256.
+ARG SLURM_SHA256=""
 
 WORKDIR /workspace/
 
@@ -23,6 +26,7 @@ RUN apk add -q --no-cache tar
 ADD https://github.com/SchedMD/slurm/archive/${SLURM_TAR} ${SLURM_TAR}
 
 RUN \
+  if [ -n "${SLURM_SHA256}" ]; then echo "${SLURM_SHA256}  ${SLURM_TAR}" | sha256sum -c -; fi && \
   mkdir -p ${SLURM_DIR} && \
   tar --strip-components=1 -zxvf ${SLURM_TAR} -C ${SLURM_DIR} && \
   rm ${SLURM_TAR}
