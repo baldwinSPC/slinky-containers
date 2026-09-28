@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Checks a slurmd image's GPU autodetection without a GPU: which gpu plugins it
-# carries, that Slurm loads them through slurmd -C and through slurmd -G with a
-# stub gres.conf, that nothing from the NVIDIA driver is inside it, and that its
-# Slurm is the same release as the given reference images.
+# Checks a slurmd image's GPU autodetection: which gpu plugins it carries, that
+# Slurm loads them through slurmd -C and through slurmd -G with a stub
+# gres.conf, that nothing from the NVIDIA driver is inside it, and that its
+# Slurm is the same release as the given reference images. With --gpu-count it
+# also checks how many GPUs a plugin enumerates and registers, on a host whose
+# GPU devices --device passes in.
 #
 # Prints PASS <id> or FAIL <id> for every assertion and then the counts. Exits 0
 # only when every planned assertion ran and passed.
@@ -24,6 +26,10 @@ usage: $(basename "$0") --image REF --platform PLATFORM --expect "nvml rsmi" [op
   --pyxis                  the image must carry pyxis and enroot
   --plugins-of REF         every Slurm plugin slurmd can load from REF, the image this one
                            replaces, must be in the image too, less the exceptions below
+  --device PATH            a host device to pass into every container, such as /dev/kfd
+                           and /dev/dri on an AMD host (repeatable)
+  --gpu-count GPU=N        slurmd -G with AutoDetect=GPU must detect and register exactly
+                           N GPUs; GPU must be in --expect (repeatable)
 EOF
 }
 
@@ -34,6 +40,8 @@ NVML_STUB=""
 SAME_AS=()
 PYXIS=false
 PLUGINS_OF=""
+DEVICES=()
+GPU_COUNTS=()
 while (($#)); do
 	case "$1" in
 	--image)
@@ -62,6 +70,14 @@ while (($#)); do
 		;;
 	--plugins-of)
 		PLUGINS_OF="$2"
+		shift 2
+		;;
+	--device)
+		DEVICES+=("$2")
+		shift 2
+		;;
+	--gpu-count)
+		GPU_COUNTS+=("$2")
 		shift 2
 		;;
 	-h | --help)
@@ -97,6 +113,38 @@ expects() {
 	[[ " $EXPECT " == *" $1 "* ]]
 }
 
+counted=" "
+for spec in ${GPU_COUNTS[@]+"${GPU_COUNTS[@]}"}; do
+	if [[ ! $spec =~ ^(nvml|rsmi)=[0-9]+$ ]]; then
+		echo "--gpu-count: want nvml=N or rsmi=N, have: $spec" >&2
+		exit 2
+	fi
+	if ! expects "${spec%%=*}"; then
+		echo "--gpu-count: ${spec%%=*} is not in --expect" >&2
+		exit 2
+	fi
+	if [[ $counted == *" ${spec%%=*} "* ]]; then
+		echo "--gpu-count: ${spec%%=*} given twice" >&2
+		exit 2
+	fi
+	counted+="${spec%%=*} "
+done
+
+# gpu_count GPU: the N of --gpu-count GPU=N, or nothing.
+gpu_count() {
+	local spec
+	for spec in ${GPU_COUNTS[@]+"${GPU_COUNTS[@]}"}; do
+		if [[ ${spec%%=*} == "$1" ]]; then
+			echo "${spec#*=}"
+		fi
+	done
+}
+
+RUN_ARGS=()
+for device in ${DEVICES[@]+"${DEVICES[@]}"}; do
+	RUN_ARGS+=(--device "$device")
+done
+
 # A multi-platform index is run through its per-platform manifest: Docker
 # Desktop's containerd store refuses to re-pull an index digest for a second
 # platform ("cannot overwrite digest").
@@ -123,7 +171,7 @@ run_in() {
 	local ref="$1" entrypoint="$2"
 	shift 2
 	pull "$ref"
-	docker run --rm --platform "$PLATFORM" --entrypoint "$entrypoint" "$ref" "$@" 2>&1 || true
+	docker run --rm --platform "$PLATFORM" ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} --entrypoint "$entrypoint" "$ref" "$@" 2>&1 || true
 }
 
 # Standard output only, for values compared as strings.
@@ -131,7 +179,7 @@ run_stdout() {
 	local ref="$1" entrypoint="$2"
 	shift 2
 	pull "$ref"
-	docker run --rm --platform "$PLATFORM" --entrypoint "$entrypoint" "$ref" "$@" 2>/dev/null || true
+	docker run --rm --platform "$PLATFORM" ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} --entrypoint "$entrypoint" "$ref" "$@" 2>/dev/null || true
 }
 
 pull() {
@@ -192,12 +240,19 @@ RSMI_LOADED="GPU RSMI plugin loaded"
 
 # A throwaway configuration written inside the container, so its ownership and
 # mode are root's on every host: a bind mount keeps the host's uid on linux.
+# The node line carries the host's CPU layout from slurmd -C, as a NodeSet's
+# dynamic node registers it; gpu plugins map each GPU's CPU affinity onto it.
 gres_script() {
 	cat <<EOF
 set -eu
 mkdir -p /tmp/gpu-test
 cd /tmp/gpu-test
-cat >slurm.conf <<'CONF'
+hw="\$(slurmd -C 2>/dev/null | sed -n -E 's/^NodeName=[^ ]+ //p' | sed -E 's/ Gres=[^ ]+//' | head -n1)"
+if [ -z "\$hw" ]; then
+	echo "slurmd -C printed no NodeName line" >&2
+	exit 1
+fi
+cat >slurm.conf <<CONF
 ClusterName=gpu-autodetect-test
 SlurmctldHost=localhost
 AuthType=auth/slurm
@@ -205,7 +260,8 @@ CredType=cred/slurm
 ProctrackType=proctrack/linuxproc
 TaskPlugin=task/none
 GresTypes=gpu
-NodeName=gputest CPUs=1 RealMemory=100 Gres=gpu:1 State=UNKNOWN
+DebugFlags=Gres
+NodeName=gputest \$hw Gres=gpu:1 State=UNKNOWN
 PartitionName=test Nodes=gputest Default=YES State=UP
 CONF
 echo 'CgroupPlugin=disabled' >cgroup.conf
@@ -221,11 +277,13 @@ echo "image:    $IMAGE"
 echo "run as:   $IMAGE_REF ($PLATFORM)"
 echo "expect:   ${EXPECT:-none}"
 echo "nvml stub: ${NVML_STUB:-none}"
+echo "devices:  ${DEVICES[*]:-none}"
+echo "gpu count: ${GPU_COUNTS[*]:-none}"
 
 # Plan: 2 plugin inventory + 1 driver + 1 licence + 2 probes + 1 gres per
-# expected plugin + a stub load and a symbol check when nvml is expected and a
-# stub is given + 1 per reference.
-PLANNED=$((2 + 1 + 1 + 2 + ${#SAME_AS[@]}))
+# expected plugin + 1 count per --gpu-count + a stub load and a symbol check
+# when nvml is expected and a stub is given + 1 per reference.
+PLANNED=$((2 + 1 + 1 + 2 + ${#GPU_COUNTS[@]} + ${#SAME_AS[@]}))
 for gpu in $EXPECT; do
 	PLANNED=$((PLANNED + 1))
 done
@@ -282,13 +340,35 @@ for gpu in $EXPECT; do
 	nvml) check "gres/nvml" "$gres" "GRES: Using node-local AutoDetect=nvml" "$NVML_NO_LIB" -- "$NVML_NOT_BUILT" ;;
 	rsmi) check "gres/rsmi" "$gres" "GRES: Using node-local AutoDetect=rsmi" "$RSMI_LOADED" -- "$RSMI_NO_LIB" "$RSMI_NOT_BUILT" ;;
 	esac
+
+	# The plugin logs how many GPUs it detected (gpu_nvml.c, gpu_rsmi.c). The
+	# Gres Name=gpu records gres.c logs after the merge are what slurmd
+	# registers: a GPU whose CPU affinity does not map is detected and dropped.
+	want="$(gpu_count "$gpu")"
+	if [[ -n $want ]]; then
+		grep -E 'GPU system device\(s\) detected|Gres Name=gpu |    (Name|Brand/Type|Device File \(minor number\)): |RSMI: |Failed to initialize rsmi' <<<"$gres" | sed "s|^|gres/$gpu: |" || true
+		lines="$(grep -cE '(^|[^0-9])[0-9]+ GPU system device\(s\) detected' <<<"$gres" || true)"
+		detected="$(sed -n -E 's/^(.*[^0-9])?([0-9]+) GPU system device\(s\) detected.*/\2/p' <<<"$gres" | head -n1)"
+		registered="$(sed -n -E 's/.*Gres Name=gpu Type=[^ ]* Count=([0-9]+).*/\1/p' <<<"$gres" | awk '{ n += $1 } END { print n + 0 }')"
+		if [[ $lines == 0 ]]; then
+			fail "count/$gpu" "no 'GPU system device(s) detected' line: the plugin did not enumerate"
+		elif [[ $lines != 1 ]]; then
+			fail "count/$gpu" "$lines 'GPU system device(s) detected' lines, want 1"
+		elif [[ $detected != "$want" ]]; then
+			fail "count/$gpu" "detected $detected, want $want"
+		elif [[ $registered != "$want" ]]; then
+			fail "count/$gpu" "detected $detected, registered $registered, want $want"
+		else
+			pass "count/$gpu"
+		fi
+	fi
 done
 
 # With a libnvidia-ml.so.1 present the gpu/nvml plugin loads.
 if expects nvml && [[ -n $NVML_STUB ]]; then
 	stub_path="$(cd "$(dirname "$NVML_STUB")" && pwd)/$(basename "$NVML_STUB")"
 	pull "$IMAGE_REF"
-	stub="$(docker run --rm --platform "$PLATFORM" -v "$stub_path:/usr/lib64/libnvidia-ml.so.1:ro" \
+	stub="$(docker run --rm --platform "$PLATFORM" ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} -v "$stub_path:/usr/lib64/libnvidia-ml.so.1:ro" \
 		--entrypoint slurmd "$IMAGE_REF" -C -vvvv 2>&1 || true)"
 	check "probe/nvml/stub" "$stub" "$NVML_LOADED" -- "$NVML_NO_LIB" "$NVML_NOT_BUILT"
 
