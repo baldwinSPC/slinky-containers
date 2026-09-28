@@ -296,6 +296,77 @@ target "login_pyxis" {
 
 ################################################################################
 
+# slurmd built with the GPU autodetect plugins, so gres.conf can use
+# AutoDetect=nvml (NVIDIA) and AutoDetect=rsmi (AMD). Only the rockylinux9
+# flavors define the slurmd-gpu stage.
+group "gpu" {
+  targets = [
+    "slurmd_gpu",
+    "slurmd_gpu_pyxis",
+  ]
+}
+
+target "_gpu" {
+  args = {
+    # ROCm publishes no arm64 packages, so arm64 builds NVML only.
+    GPU_AUTODETECT_AMD64 = "nvml rsmi"
+    GPU_AUTODETECT_ARM64 = "nvml"
+  }
+}
+
+target "_slurmd_gpu" {
+  inherits = ["_slurmd"]
+  labels = {
+    # Ref: https://github.com/opencontainers/image-spec/blob/v1.0/annotations.md
+    "org.opencontainers.image.title" = "Slurm Worker Agent (GPU)"
+    "org.opencontainers.image.description" = "slurmd - The compute node daemon for Slurm, with GPU autodetection through NVML (amd64, arm64) and ROCm SMI (amd64)"
+    # Ref: https://docs.redhat.com/en/documentation/red_hat_software_certification/2025/html/red_hat_openshift_software_certification_policy_guide/assembly-requirements-for-container-images_openshift-sw-cert-policy-introduction#con-image-metadata-requirements_openshift-sw-cert-policy-container-images
+    "name" = "Slurm Worker Agent (GPU)"
+    "summary" = "slurmd - The compute node daemon for Slurm, with GPU autodetection"
+    "description" = "slurmd - The compute node daemon for Slurm, with GPU autodetection through NVML (amd64, arm64) and ROCm SMI (amd64)"
+  }
+}
+
+target "slurmd_gpu" {
+  inherits = ["_slurmd_gpu", "_gpu"]
+  context = context
+  target = "slurmd-gpu"
+  tags = [
+    format_tag(REGISTRY, "slurmd_gpu", slurm_version(slurm_version), linux_flavor, SUFFIX),
+    format_tag(REGISTRY, "slurmd_gpu", slurm_version, linux_flavor, SUFFIX),
+  ]
+}
+
+target "slurmd_gpu_pyxis" {
+  inherits = ["_slurmd_gpu", "_pyxis"]
+  target = "slurmd-pyxis"
+  tags = [
+    format_tag(REGISTRY, "slurmd_gpu_pyxis", slurm_version(slurm_version), linux_flavor, SUFFIX),
+    format_tag(REGISTRY, "slurmd_gpu_pyxis", slurm_version, linux_flavor, SUFFIX),
+  ]
+  contexts = {
+    format_tag(REGISTRY, "slurmd", slurm_version(slurm_version), linux_flavor, SUFFIX) = "target:slurmd_gpu"
+    format_tag(REGISTRY, "slurmd", slurm_version, linux_flavor, SUFFIX) = "target:slurmd_gpu"
+  }
+}
+
+group "gpu-multiarch" {
+  targets = [
+    "slurmd_gpu_multiarch",
+    "slurmd_gpu_pyxis_multiarch",
+  ]
+}
+
+target "slurmd_gpu_multiarch" {
+  inherits = ["slurmd_gpu", "_multiarch"]
+}
+
+target "slurmd_gpu_pyxis_multiarch" {
+  inherits = ["slurmd_gpu_pyxis", "_multiarch"]
+}
+
+################################################################################
+
 group "multiarch" {
   targets = [
     "core-multiarch",

@@ -3,6 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ARG REGISTRY=ghcr.io/slinkyproject
+# Empty resolves the latest GitHub release at build time.
+ARG ENROOT_VERSION=""
+ARG PYXIS_VERSION=""
+# Empty installs the latest nvidia-container-toolkit; a version such as
+# 1.20.1-1 pins the toolkit and the libnvidia-container packages it requires.
+ARG NVIDIA_CONTAINER_TOOLKIT_VERSION=""
+
+################################################################################
+# Replaced by a named build context holding SHA256SUMS to verify the downloads.
+FROM scratch AS checksums
 
 ################################################################################
 FROM ${REGISTRY}/slurmd:26.05-rockylinux9 AS download
@@ -10,12 +20,15 @@ FROM ${REGISTRY}/slurmd:26.05-rockylinux9 AS download
 SHELL ["bash", "-c"]
 
 ARG TARGETARCH
+ARG ENROOT_VERSION
+ARG PYXIS_VERSION
 
 USER root
 WORKDIR /tmp/
 
-RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked <<EOR
-# Download Latest Versions
+RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked \
+  --mount=type=bind,from=checksums,target=/checksums/ <<EOR
+# Download Versions
 set -xeuo pipefail
 dnf -q -y update
 dnf -q -y install --setopt='install_weak_deps=False' \
@@ -47,8 +60,8 @@ latest_github_release() {
   fi
   printf '%s\n' "${tag}"
 }
-ENROOT_VERSION="$(latest_github_release enroot)"
-PYXIS_VERSION="$(latest_github_release pyxis)"
+ENROOT_VERSION="${ENROOT_VERSION:-$(latest_github_release enroot)}"
+PYXIS_VERSION="${PYXIS_VERSION:-$(latest_github_release pyxis)}"
 # Determine ARCH
 ARCH=${TARGETARCH}
 case ${TARGETARCH} in
@@ -66,6 +79,26 @@ wget -N -P /etc/enroot/hooks.d/ \
   https://raw.githubusercontent.com/NVIDIA/enroot/refs/tags/v${ENROOT_VERSION}/conf/hooks/extra/50-slurm-pytorch.sh
 chmod 755 -R /etc/enroot/hooks.d/
 wget -N -O pyxis.tar.gz https://github.com/NVIDIA/pyxis/archive/refs/tags/v${PYXIS_VERSION}.tar.gz
+# Verify
+if [ -f /checksums/SHA256SUMS ]; then
+  DOWNLOADS=(
+    "tmp/enroot-${ENROOT_VERSION}-1.el8.${ARCH}.rpm"
+    "tmp/enroot+caps-${ENROOT_VERSION}-1.el8.${ARCH}.rpm"
+    "tmp/pyxis.tar.gz"
+    "usr/share/bash-completion/completions/enroot"
+    "etc/enroot/hooks.d/50-mig-config.sh"
+    "etc/enroot/hooks.d/50-sharp.sh"
+    "etc/enroot/hooks.d/50-slurm-pmi.sh"
+    "etc/enroot/hooks.d/50-slurm-pytorch.sh"
+  )
+  for f in "${DOWNLOADS[@]}"; do
+    if ! awk -v f="${f}" '$2 == f { found = 1 } END { exit !found }' /checksums/SHA256SUMS; then
+      echo "no checksum for /${f} in SHA256SUMS" >&2
+      exit 1
+    fi
+  done
+  (cd / && sha256sum --check --strict --ignore-missing /checksums/SHA256SUMS)
+fi
 EOR
 
 # Ref: https://github.com/NVIDIA/pyxis?tab=readme-ov-file#with-a-rpm-package
@@ -83,6 +116,9 @@ mkdir pyxis
 tar -zxvf pyxis.tar.gz -C pyxis --strip-components=1
 cd pyxis
 make rpm
+# make rpm writes under pyxis/rpm/RPMS/<arch>/, which the COPY of /tmp/*.rpm
+# below does not reach.
+find /tmp/pyxis/rpm/RPMS -name '*.rpm' -exec cp -t /tmp/ {} +
 EOR
 
 ################################################################################
@@ -94,8 +130,9 @@ ENV ENROOT_VERSION="${ENROOT_VERSION}"
 ARG PYXIS_VERSION
 ENV PYXIS_VERSION="${PYXIS_VERSION}"
 
+ARG NVIDIA_CONTAINER_TOOLKIT_VERSION
+
 COPY --from=download /tmp/*.rpm ./
-COPY --from=download /tmp/**/*.rpm ./
 COPY --from=download /etc/enroot/hooks.d/* /etc/enroot/hooks.d/
 COPY --from=download /usr/share/bash-completion/completions/* /usr/share/bash-completion/completions/
 
@@ -112,10 +149,16 @@ dnf -q -y install --setopt='install_weak_deps=False' \
   fuse-overlayfs pigz squashfuse \
   ./*.rpm
 rm *.rpm
+for f in /usr/lib64/slurm/spank_pyxis.so /usr/share/pyxis/pyxis.conf; do
+  if [ ! -f "${f}" ]; then
+    echo "pyxis is not installed: ${f} is missing" >&2
+    exit 1
+  fi
+done
 # Configure
 mkdir -m 777 -p /usr/share/enroot/enroot-data/
 mkdir -m 755 -p /run/enroot/
-mkdir -m 644 -p /etc/slurm/plugstack.conf.d/
+mkdir -m 755 -p /etc/slurm/plugstack.conf.d/
 ln -s /usr/share/pyxis/pyxis.conf /etc/slurm/plugstack.conf.d/pyxis.conf
 EOR
 
@@ -127,8 +170,17 @@ ADD https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-too
 RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked <<EOR
 # Install Nvidia Container Toolkit
 set -xeuo pipefail
+NVIDIA_CONTAINER_TOOLKIT_PACKAGES=(nvidia-container-toolkit)
+if [ -n "${NVIDIA_CONTAINER_TOOLKIT_VERSION}" ]; then
+  NVIDIA_CONTAINER_TOOLKIT_PACKAGES=(
+    "nvidia-container-toolkit-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+    "nvidia-container-toolkit-base-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+    "libnvidia-container-tools-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+    "libnvidia-container1-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+  )
+fi
 dnf -q -y install --setopt='install_weak_deps=False' \
-  nvidia-container-toolkit
+  "${NVIDIA_CONTAINER_TOOLKIT_PACKAGES[@]}"
 EOR
 
 ################################################################################
@@ -140,8 +192,9 @@ ENV ENROOT_VERSION="${ENROOT_VERSION}"
 ARG PYXIS_VERSION
 ENV PYXIS_VERSION="${PYXIS_VERSION}"
 
+ARG NVIDIA_CONTAINER_TOOLKIT_VERSION
+
 COPY --from=download /tmp/*.rpm ./
-COPY --from=download /tmp/**/*.rpm ./
 COPY --from=download /etc/enroot/hooks.d/* /etc/enroot/hooks.d/
 COPY --from=download /usr/share/bash-completion/completions/* /usr/share/bash-completion/completions/
 
@@ -158,10 +211,16 @@ dnf -q -y install --setopt='install_weak_deps=False' \
   fuse-overlayfs pigz squashfuse \
   ./*.rpm
 rm *.rpm
+for f in /usr/lib64/slurm/spank_pyxis.so /usr/share/pyxis/pyxis.conf; do
+  if [ ! -f "${f}" ]; then
+    echo "pyxis is not installed: ${f} is missing" >&2
+    exit 1
+  fi
+done
 # Configure
 mkdir -m 777 -p /usr/share/enroot/enroot-data/
 mkdir -m 755 -p /run/enroot/
-mkdir -m 644 -p /etc/slurm/plugstack.conf.d/
+mkdir -m 755 -p /etc/slurm/plugstack.conf.d/
 ln -s /usr/share/pyxis/pyxis.conf /etc/slurm/plugstack.conf.d/pyxis.conf
 EOR
 
@@ -173,6 +232,15 @@ ADD https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-too
 RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked <<EOR
 # Install Nvidia Container Toolkit
 set -xeuo pipefail
+NVIDIA_CONTAINER_TOOLKIT_PACKAGES=(nvidia-container-toolkit)
+if [ -n "${NVIDIA_CONTAINER_TOOLKIT_VERSION}" ]; then
+  NVIDIA_CONTAINER_TOOLKIT_PACKAGES=(
+    "nvidia-container-toolkit-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+    "nvidia-container-toolkit-base-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+    "libnvidia-container-tools-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+    "libnvidia-container1-${NVIDIA_CONTAINER_TOOLKIT_VERSION}"
+  )
+fi
 dnf -q -y install --setopt='install_weak_deps=False' \
-  nvidia-container-toolkit
+  "${NVIDIA_CONTAINER_TOOLKIT_PACKAGES[@]}"
 EOR
