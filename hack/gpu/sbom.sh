@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Lists every RPM in an image as tab-separated name, epoch:version-release,
-# arch, licence tag, source RPM and vendor, sorted by name. With --baseline,
-# prints only the packages the image has and the baseline image does not.
-# Counts go to stderr: packages, and how many licence tags name GPL (LGPL and
-# AGPL included) or MPL.
+# arch, licence tag, source RPM, vendor, and the licence read from the package's
+# own licence file where licence-notes.tsv records one for that exact version.
+# The tag and the file can disagree, and a reviewer sees both. Sorted by name.
+# With --baseline, prints only the packages the image has and the baseline
+# image does not. Counts go to stderr: packages, how many licence tags name GPL
+# (LGPL and AGPL included) or MPL, and how many rows carry a licence read.
 #
 # usage: sbom.sh --image REF --platform PLATFORM [--baseline REF]
 
@@ -40,6 +42,7 @@ if [[ -z $IMAGE || -z $PLATFORM ]]; then
 fi
 
 QF='%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\t%{ARCH}\t%{LICENSE}\t%{SOURCERPM}\t%{VENDOR}\n'
+NOTES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/licence-notes.tsv"
 
 packages() {
 	docker run --rm --platform "$PLATFORM" --entrypoint rpm "$1" -qa --qf "$QF" | LC_ALL=C sort
@@ -59,7 +62,14 @@ if [[ -n $BASELINE ]]; then
 	list="$(awk -F'\t' 'NR == FNR { seen[$1] = 1; next } !($1 in seen)' <(echo "$base_names") <(echo "$list"))"
 fi
 
-printf 'name\tepoch:version-release\tarch\tlicense\tsource_rpm\tvendor\n'
+# Joined on name and version-release: a note for another version does not apply.
+if [[ -n $list ]]; then
+	list="$(awk -F'\t' -v OFS='\t' '
+		NR == FNR { if ($0 !~ /^#/ && NF == 4) note[$1 "\t" $2] = $3 " (" $4 ")"; next }
+		{ vr = $2; sub(/^[0-9]+:/, "", vr); print $0, note[$1 "\t" vr] }' "$NOTES" <(echo "$list"))"
+fi
+
+printf 'name\tepoch:version-release\tarch\tlicense\tsource_rpm\tvendor\tlicence_read\n'
 if [[ -n $list ]]; then
 	echo "$list"
 fi
@@ -67,4 +77,5 @@ fi
 total="$(grep -c . <<<"$list" || true)"
 gpl="$(cut -f4 <<<"$list" | grep -c -E 'GPL' || true)"
 mpl="$(cut -f4 <<<"$list" | grep -c -E 'MPL' || true)"
-echo "packages=$total gpl_family=$gpl mpl=$mpl${BASELINE:+ (added over $BASELINE)}" >&2
+read_count="$(awk -F'\t' '$7 != ""' <<<"$list" | grep -c . || true)"
+echo "packages=$total gpl_family=$gpl mpl=$mpl licence_read=$read_count${BASELINE:+ (added over $BASELINE)}" >&2
