@@ -6,7 +6,8 @@
 # files that set them, so the notes cannot disagree with the build.
 #
 # usage: release-notes.sh INDEXES_FILE
-#   INDEXES_FILE has one "image index-digest amd64-digest arm64-digest" line per image.
+#   INDEXES_FILE has one "image index-digest amd64-image-digest arm64-image-digest"
+#   line per image, the image digests being the manifests the index lists.
 #   Test records are read from sbom/test-*.txt (before the push) and
 #   digests/test-*-pushed.txt (the pushed digests) beside it.
 # Environment: REGISTRY, SLURM_TAG, GITHUB_SHA, GITHUB_SERVER_URL, GITHUB_REPOSITORY.
@@ -61,7 +62,7 @@ done <"$indexes"
 
 cat <<EOF
 
-Per platform:
+The image manifests each index lists:
 
 | image | linux/amd64 | linux/arm64 |
 |---|---|---|

@@ -245,7 +245,12 @@ jobs:
               --tag "${REGISTRY}/${image}:${SLURM_TAG}" --tag "${REGISTRY}/${image}:${SLURM_MINOR_TAG}" \
               "${REGISTRY}/${image}@${amd64}" "${REGISTRY}/${image}@${arm64}"
             index="$(docker buildx imagetools inspect "${REGISTRY}/${image}:${SLURM_TAG}" --format '{{json .Manifest}}' | jq -r .digest)"
-            echo "${image} ${index} ${amd64} ${arm64}" | tee -a "${RUNNER_TEMP}/indexes"
+            # The image manifests the index lists, one per platform. The pushed
+            # digests above name each platform's own index, image plus attestation.
+            raw="$(docker buildx imagetools inspect --raw "${REGISTRY}/${image}@${index}")"
+            amd64_image="$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest' <<<"$raw")"
+            arm64_image="$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")][0].digest' <<<"$raw")"
+            echo "${image} ${index} ${amd64_image} ${arm64_image}" | tee -a "${RUNNER_TEMP}/indexes"
           done
 
       - name: Architecture guard
