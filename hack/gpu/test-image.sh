@@ -298,7 +298,7 @@ if [[ -n $PLUGINS_OF ]]; then
 fi
 
 plugins="$(run_in "$IMAGE_REF" bash -c 'ls -1 /usr/lib64/slurm/ | grep -E "^gpu_" || true')"
-echo "gpu plugins: $(tr '\n' ' ' <<<"$plugins")"
+echo "gpu plugins: $(grep -E '^gpu_' <<<"$plugins" | tr '\n' ' ' || true)"
 for gpu in nvml rsmi; do
 	if expects "$gpu"; then
 		if grep -qx "gpu_${gpu}.so" <<<"$plugins"; then pass "plugin/$gpu/present"; else fail "plugin/$gpu/present" "no /usr/lib64/slurm/gpu_${gpu}.so"; fi
@@ -307,9 +307,16 @@ for gpu in nvml rsmi; do
 	fi
 done
 
-driver_files="$(run_in "$IMAGE_REF" find / -xdev \( -name 'libnvidia-ml*' -o -name 'nvml.h' \) -print)"
+# Only paths count as files: the output also carries the container runtime's
+# own stderr, such as podman's docker emulation banner. find reports its exit
+# status last, so a find that did not run is not read as no files.
+driver_out="$(run_in "$IMAGE_REF" bash -c 'find / -xdev \( -name "libnvidia-ml*" -o -name nvml.h \) -print; echo "find exit $?"')"
+driver_files="$(grep '^/' <<<"$driver_out" || true)"
 driver_count="$(grep -c . <<<"$driver_files" || true)"
-if [[ $driver_count == 0 ]]; then
+if ! grep -qx 'find exit 0' <<<"$driver_out"; then
+	fail "driver/absent" "find did not run to completion"
+	tail -n 25 <<<"$driver_out" | sed 's/^/    | /'
+elif [[ $driver_count == 0 ]]; then
 	pass "driver/absent"
 else
 	fail "driver/absent" "$driver_count file(s): $(tr '\n' ' ' <<<"$driver_files")"
