@@ -7,7 +7,9 @@
 # in the wanted one is detected, the plugin never enumerates, and two GPUs
 # register as two records. driver/absent runs with podman's docker emulation
 # printing its banner on stderr, with a driver file in the image, and with a
-# find that does not run.
+# find that does not run. The GPU runs model the runtime: --gpus injects
+# libnvidia-ml.so.1 and must reach only slurmd -C and slurmd -G, and --device
+# must reach slurmd -G for the GPU to be seen.
 
 set -euo pipefail
 
@@ -18,9 +20,13 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 cat >"$work/bin/docker" <<'EOF'
 #!/usr/bin/env bash
-# Answers the docker calls test-image.sh makes for test/gpu:1 with --expect rsmi.
-# PODMAN_BANNER prints podman-docker's banner on every call, DRIVER_FILES are
-# the paths find reports, and FIND_FAILS makes find fail to start.
+# Answers the docker calls test-image.sh makes for test/gpu:1.
+# IMAGE_GPUS is the image's gpu plugin, rsmi (the default) or nvml. A run given
+# --gpus has libnvidia-ml.so.1 injected, as the NVIDIA toolkit does. With
+# REQUIRE_GPU, slurmd -G prints GRES_LOG only when --gpus or --device reached
+# it, and otherwise what the plugin logs with no GPU. PODMAN_BANNER prints
+# podman-docker's banner on every call, DRIVER_FILES are driver files in the
+# image, and FIND_FAILS makes find fail to start.
 if [[ -n ${PODMAN_BANNER:-} ]]; then
 	echo "Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg." >&2
 fi
@@ -31,14 +37,43 @@ if [[ $1 != run ]]; then
 	echo "stub docker: unexpected arguments: $*" >&2
 	exit 1
 fi
+injected=false
+gpu_passed=false
+for a in "$@"; do
+	case "$a" in
+	--gpus) injected=true gpu_passed=true ;;
+	--device) gpu_passed=true ;;
+	esac
+done
+image_gpus="${IMAGE_GPUS:-rsmi}"
 case "$*" in
-*"slurmd -G"*) cat "$GRES_LOG" ;;
+*"slurmd -G"*)
+	if [[ -z ${REQUIRE_GPU:-} ]] || $gpu_passed; then
+		cat "$GRES_LOG"
+	elif [[ $image_gpus == nvml ]]; then
+		echo "slurmd: GRES: Using node-local AutoDetect=nvml"
+		echo "slurmd: We were configured with nvml functionality, but that lib wasn't found on the system."
+	else
+		echo "slurmd: GRES: Using node-local AutoDetect=rsmi"
+		echo "slurmd: GPU RSMI plugin loaded"
+		echo "slurmd: 0 GPU system device(s) detected"
+	fi
+	;;
 *"--entrypoint slurmd test/gpu:1 -C"*)
-	echo "slurmd: GPU RSMI plugin loaded"
-	echo "slurmd: We were configured to autodetect nvml functionality, but we weren't able to find that lib when Slurm was configured."
+	if [[ $image_gpus == nvml ]]; then
+		echo "slurmd: Configured with rsmi, but rsmi isn't enabled during the build."
+		if $injected; then
+			echo "slurmd: GPU NVML plugin loaded"
+		else
+			echo "slurmd: We were configured with nvml functionality, but that lib wasn't found on the system."
+		fi
+	else
+		echo "slurmd: GPU RSMI plugin loaded"
+		echo "slurmd: We were configured to autodetect nvml functionality, but we weren't able to find that lib when Slurm was configured."
+	fi
 	;;
 *"--entrypoint slurmd test/gpu:1 -V"*) echo "slurm 26.05.4" ;;
-*"ls -1 /usr/lib64/slurm/"*) echo "gpu_rsmi.so" ;;
+*"ls -1 /usr/lib64/slurm/"*) echo "gpu_${image_gpus}.so" ;;
 *"/usr/share/licenses/slurm/"*) printf 'have COPYING\nhave DISCLAIMER\nhave LICENSE.OpenSSL\n1\n' ;;
 *"nvml.h"*)
 	if [[ -n ${FIND_FAILS:-} ]]; then
@@ -47,6 +82,9 @@ case "$*" in
 	fi
 	if [[ -n ${DRIVER_FILES:-} ]]; then
 		printf '%s\n' "$DRIVER_FILES"
+	fi
+	if $injected; then
+		echo "/usr/lib64/libnvidia-ml.so.1"
 	fi
 	if [[ $* == *"find exit"* ]]; then
 		echo "find exit 0"
@@ -66,6 +104,10 @@ GRES_1='slurmd: Gres Name=gpu Type=0x1002 Count=1 Index=128 ID=7696487 File=/dev
 AGREE="$LOADED
 slurmd: 1 GPU system device(s) detected
 $GRES_1"
+NVML_AGREE='slurmd: GRES: Using node-local AutoDetect=nvml
+slurmd: GPU NVML plugin loaded
+slurmd: 1 GPU system device(s) detected
+slurmd: Gres Name=gpu Type=nvidia_gb10 Count=1 Index=0 ID=7696487 File=/dev/nvidia0 Cores=0-19 CoreCnt=20 Links=-1 Flags=HAS_FILE,HAS_TYPE,ENV_NVML'
 
 EXECUTED=0
 FAILED=0
@@ -79,14 +121,28 @@ check() {
 	fi
 }
 
-# harness NAME WANT LOG [VAR=VALUE...]: what test-image.sh prints for LOG as
-# the slurmd -G output, with --gpu-count rsmi=WANT and the stub's settings.
+# harness_run NAME LOG [VAR=VALUE...] -- ARGS...: what test-image.sh prints
+# for LOG as the slurmd -G output, with the stub's settings and ARGS.
+harness_run() {
+	local name="$1"
+	printf '%s\n' "$2" >"$work/$name.log"
+	shift 2
+	local settings=()
+	while [[ $1 != -- ]]; do
+		settings+=("$1")
+		shift
+	done
+	shift
+	env GRES_LOG="$work/$name.log" PATH="$work/bin:$PATH" ${settings[@]+"${settings[@]}"} bash "$HERE/test-image.sh" \
+		--image test/gpu:1 --platform linux/amd64 "$@" 2>&1 || true
+}
+
+# harness NAME WANT LOG [VAR=VALUE...]: harness_run for the rsmi image with
+# --gpu-count rsmi=WANT.
 harness() {
-	local name="$1" want="$2"
-	printf '%s\n' "$3" >"$work/$name.log"
+	local name="$1" want="$2" log="$3"
 	shift 3
-	env GRES_LOG="$work/$name.log" PATH="$work/bin:$PATH" ${@+"$@"} bash "$HERE/test-image.sh" \
-		--image test/gpu:1 --platform linux/amd64 --expect rsmi --gpu-count "rsmi=$want" 2>&1 || true
+	harness_run "$name" "$log" ${@+"$@"} -- --expect rsmi --gpu-count "rsmi=$want"
 }
 
 # verdict ID OUTPUT: the ID assertion's line and the counts, joined by |.
@@ -132,5 +188,17 @@ check "driver-file" "$(verdict driver/absent "$(harness file 1 "$AGREE" DRIVER_F
 check "find-did-not-run" "$(verdict driver/absent "$(harness nofind 1 "$AGREE" FIND_FAILS=1)")" \
 	"FAIL driver/absent: find did not run to completion|executed=8 planned=8 passed=7 failed=1|"
 
+check "device-reaches-gres" "$(verdict count/rsmi "$(harness_run device "$AGREE" REQUIRE_GPU=1 -- \
+	--expect rsmi --device /dev/kfd --device /dev/dri --gpu-count rsmi=1)")" \
+	"PASS count/rsmi|executed=8 planned=8 passed=8 failed=0|"
+
+nvml="$(harness_run gpus "$NVML_AGREE" IMAGE_GPUS=nvml REQUIRE_GPU=1 -- --expect nvml --gpus all --gpu-count nvml=1)"
+check "gpus-reach-autodetection-only" "$(grep -E '^FAIL ' <<<"$nvml" | tr '\n' '|')$(verdict count/nvml "$nvml")" \
+	"PASS count/nvml|executed=8 planned=8 passed=8 failed=0|"
+
+check "gpus-absent" "$(verdict probe/nvml "$(harness_run nogpus "$NVML_AGREE" IMAGE_GPUS=nvml REQUIRE_GPU=1 -- \
+	--expect nvml --gpu-count nvml=1)")" \
+	"PASS probe/nvml|executed=8 planned=8 passed=7 failed=1|"
+
 echo "executed=$EXECUTED failed=$FAILED"
-((EXECUTED == 10 && FAILED == 0))
+((EXECUTED == 13 && FAILED == 0))
