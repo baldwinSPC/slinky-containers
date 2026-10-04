@@ -2,15 +2,19 @@
 
 This repository is a fork of
 [SlinkyProject/containers](https://github.com/SlinkyProject/containers). It adds
-two images, built from `schedmd/slurm/26.05/rockylinux9/`:
+three images, built from `schedmd/slurm/26.05/rockylinux9/`:
 
 - `ghcr.io/baldwinspc/slinky-containers/slurmd_gpu`
 - `ghcr.io/baldwinspc/slinky-containers/slurmd_gpu_pyxis`
+- `ghcr.io/baldwinspc/slinky-containers/login_gpu_pyxis`
 
 They are built and published from this repository by baldwinSPC, not by SchedMD.
-Each is Slurm's `slurmd` with GPU autodetection. `gres.conf` can say
+The first two are Slurm's `slurmd` with GPU autodetection. `gres.conf` can say
 `AutoDetect=nvml` on linux/amd64 and linux/arm64 and `AutoDetect=rsmi` on
 linux/amd64. The published `ghcr.io/slinkyproject/slurmd` images carry neither.
+`login_gpu_pyxis` is upstream's `login` stage built from the same Slurm build,
+with pyxis, so `srun --container-image` works from it and `srun --mpi=pmix`
+finds `mpi_pmix`.
 
 Every publish run creates a GitHub release that lists the image digests,
 attaches an SBOM of every package in each image, and attaches the Slurm source
@@ -18,10 +22,11 @@ archive the images were built from.
 
 ## Slurm
 
-Both images contain Slurm, Copyright (C) SchedMD LLC and the Slurm contributors.
-It is licensed under the GNU General Public License, version 2 or later, with an
-exception permitting linking with OpenSSL. The images carry the licence at
-`/usr/share/licenses/slurm/` (`COPYING`, `DISCLAIMER`, `LICENSE.OpenSSL`).
+All three images contain Slurm, Copyright (C) SchedMD LLC and the Slurm
+contributors. It is licensed under the GNU General Public License, version 2 or
+later, with an exception permitting linking with OpenSSL. The images carry the
+licence at `/usr/share/licenses/slurm/` (`COPYING`, `DISCLAIMER`,
+`LICENSE.OpenSSL`).
 
 **Corresponding source:**
 
@@ -42,17 +47,19 @@ set in `schedmd/slurm/26.05/rockylinux9/Dockerfile`.
 
 Each licence was read at the version pinned here.
 
-| Component                       | Version                                                   | Licence                                                                                                                                        | In                       |
-| ------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| ROCm SMI (`rocm-smi-lib`)       | 7.8.0.70204, ROCm 7.2.4                                   | MIT. The package's `LICENSE.md` and `LICENSE.md` at `ROCm/rocm_smi_lib` tag `rocm-7.2.4` are identical; the RPM header's licence tag says NCSA | both images, linux/amd64 |
-| `rocm-core`                     | 7.2.4.70204                                               | MIT (`LICENSE.md` in the package)                                                                                                              | both images, linux/amd64 |
-| enroot, enroot+caps             | 4.2.1                                                     | Apache-2.0 (`LICENSE` at `NVIDIA/enroot` tag `v4.2.1`)                                                                                         | `slurmd_gpu_pyxis`       |
-| pyxis                           | 0.24.0                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/pyxis` tag `v0.24.0`)                                                                                         | `slurmd_gpu_pyxis`       |
-| nvidia-container-toolkit, -base | 1.20.1                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/nvidia-container-toolkit` tag `v1.20.1`)                                                                      | `slurmd_gpu_pyxis`       |
-| libnvidia-container1, -tools    | 1.20.1, built from `NVIDIA/libnvidia-container` `v1.20.0` | Apache-2.0 (`LICENSE`). Its `NOTICE` adds the LGPL-3.0-or-later terms of elfutils `libelf`, which this build links                             | `slurmd_gpu_pyxis`       |
+| Component                       | Version                                                   | Licence                                                                                                                                            | In                       |
+| ------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| ROCm SMI (`rocm-smi-lib`)       | 7.8.0.70204, ROCm 7.2.4                                   | MIT. The package's `LICENSE.md` and `LICENSE.md` at `ROCm/rocm_smi_lib` tag `rocm-7.2.4` are identical; the RPM header's licence tag says NCSA     | both images, linux/amd64 |
+| `rocm-core`                     | 7.2.4.70204                                               | MIT (`LICENSE.md` in the package)                                                                                                                  | both images, linux/amd64 |
+| enroot, enroot+caps             | 4.2.1                                                     | Apache-2.0 (`LICENSE` at `NVIDIA/enroot` tag `v4.2.1`). The same file notes that enroot bundles makeself (GPL-2.0), installed as `enroot-makeself` | both pyxis images        |
+| pyxis                           | 0.24.0                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/pyxis` tag `v0.24.0`)                                                                                             | both pyxis images        |
+| nvidia-container-toolkit, -base | 1.20.1                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/nvidia-container-toolkit` tag `v1.20.1`)                                                                          | both pyxis images        |
+| libnvidia-container1, -tools    | 1.20.1, built from `NVIDIA/libnvidia-container` `v1.20.0` | Apache-2.0 (`LICENSE`). Its `NOTICE` adds the LGPL-3.0-or-later terms of elfutils `libelf`, which this build links                                 | both pyxis images        |
 
-The pyxis image also carries the Rocky Linux and EPEL packages enroot and the
-toolkit depend on, and the SBOM lists each of them.
+The pyxis images also carry the Rocky Linux and EPEL packages enroot and the
+toolkit depend on, and the SBOM lists each of them. `login_gpu_pyxis` also
+carries what upstream's `sackd` and `login` stages install: kubectl from
+`pkgs.k8s.io` (Apache-2.0, the stable release at build time), OpenSSH and SSSD.
 
 These are used at build time only and are not in the images:
 
@@ -100,8 +107,12 @@ is in the source repositories of Rocky Linux
 - `gpu_nvml` and `gpu_rsmi`, as above.
 - `mpi_pmix` (PMIx 3.2.3 from EL9) and `compress_lz4`. Upstream's rockylinux9
   `slurmd` lacks both. Its `26.05-ubuntu26.04` `slurmd` has both.
-- The pyxis RPM is installed. Upstream's `slurmd-pyxis:26.05-rockylinux9` copies
-  RPMs from a path that `make rpm` does not write, and ships without pyxis.
+- The pyxis RPM is installed. Upstream's `slurmd-pyxis:26.05-rockylinux9` and
+  `login-pyxis:26.05-rockylinux9` copy RPMs from a path that `make rpm` does not
+  write, and ship without pyxis.
+- `login_gpu_pyxis` is built from this fork's Slurm build. Upstream's
+  `login:26.05-rockylinux9` has no `mpi_pmix`, which srun loads on the
+  submitting side for `--mpi=pmix`.
 - `/etc/slurm/plugstack.conf.d` is mode 755. Upstream creates it with mode 644.
 - The enroot, pyxis and nvidia-container-toolkit versions are pinned, and the
   downloads are checked against `pyxis-checksums/SHA256SUMS`. Upstream resolves
