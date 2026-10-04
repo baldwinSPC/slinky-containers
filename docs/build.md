@@ -202,6 +202,10 @@ a requested plugin is not in the Slurm package it produces.
 - **ROCm SMI:** `rocm-smi-lib` (`ROCM_SMI_LIB`, from ROCm `ROCM_VERSION`) is
   installed in the image, because the AMD device plugin mounts only `/dev/kfd`
   and `/dev/dri`.
+- **NCCL:** where NVML is built, the `libnccl` runtime RPM (`NCCL_VERSION`) from
+  the same CUDA repository is checked against `NCCL_SHA256_AMD64` or
+  `NCCL_SHA256_ARM64` and installed in `slurmd-gpu` and `login-gpu`. `login-gpu`
+  also gets an `nccl/<version>` Lmod modulefile in `/etc/modulefiles`.
 
 ## Extending the images with additional software
 

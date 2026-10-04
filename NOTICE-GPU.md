@@ -14,7 +14,8 @@ The first two are Slurm's `slurmd` with GPU autodetection. `gres.conf` can say
 linux/amd64. The published `ghcr.io/slinkyproject/slurmd` images carry neither.
 `login_gpu_pyxis` is upstream's `login` stage built from the same Slurm build,
 with pyxis, so `srun --container-image` works from it and `srun --mpi=pmix`
-finds `mpi_pmix`.
+finds `mpi_pmix`. All three carry the NCCL runtime library, and in
+`login_gpu_pyxis` a login shell's `module avail` lists an `nccl` module for it.
 
 Every publish run creates a GitHub release that lists the image digests,
 attaches an SBOM of every package in each image, and attaches the Slurm source
@@ -55,6 +56,29 @@ Each licence was read at the version pinned here.
 | pyxis                           | 0.24.0                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/pyxis` tag `v0.24.0`)                                                                                             | both pyxis images        |
 | nvidia-container-toolkit, -base | 1.20.1                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/nvidia-container-toolkit` tag `v1.20.1`)                                                                          | both pyxis images        |
 | libnvidia-container1, -tools    | 1.20.1, built from `NVIDIA/libnvidia-container` `v1.20.0` | Apache-2.0 (`LICENSE`). Its `NOTICE` adds the LGPL-3.0-or-later terms of elfutils `libelf`, which this build links                                 | both pyxis images        |
+| NCCL (`libnccl`)                | 2.32.3-1+cuda12.9                                         | Apache-2.0, with parts under BSD-3-Clause. See below                                                                                               | all three images         |
+
+**NCCL.** The `libnccl` RPM comes from NVIDIA's CUDA repository for RHEL 9, the
+same repository as the NVML headers, and each architecture's RPM is checked
+against the sha256 pinned in `schedmd/slurm/26.05/rockylinux9/Dockerfile`. It
+installs `libnccl.so.2` and the device-code files `libnccl_device.bc` and
+`libnccl_device.ltoir` in `/usr/lib64`, and its licence at
+`/usr/share/doc/libnccl/LICENSE.txt`. That file is identical to `LICENSE.txt` at
+`NVIDIA/nccl` tag `v2.32.3-1` (commit `12df1a11`): Apache-2.0, with parts
+retaining a BSD-3-Clause licence. The RPM header's licence tag says
+`Proprietary`. The library statically links the CUDA runtime: NCCL's
+`src/Makefile` links `cudart_static` by default, and `libnccl.so.2.32.3` needs no
+`libcudart` and carries the runtime's own strings. The CUDA Toolkit End User
+License Agreement lists `libcudart_static.a` as distributable in its
+Attachment A. No headers, CUDA compiler or other CUDA Toolkit component is in
+the images.
+
+**Lmod.** The `nccl/2.32.3` modulefile in `login_gpu_pyxis` is at
+`/etc/modulefiles/nccl/2.32.3.lua` and sets `NCCL_HOME=/usr`. `module` is Lmod
+8.7.65 from EPEL, which every image here and upstream's already carry because
+`openmpi` requires `environment(modules)`; `login_gpu_pyxis` now installs it by
+name. Its RPM licence tag is `MIT AND LGPL-2.0-only`: Lmod is MIT, and its
+`tools/base64.lua` is LGPL-2.0 and ships as Lua source.
 
 The pyxis images also carry the Rocky Linux and EPEL packages enroot and the
 toolkit depend on, and the SBOM lists each of them. `login_gpu_pyxis` also
@@ -117,3 +141,5 @@ is in the source repositories of Rocky Linux
 - The enroot, pyxis and nvidia-container-toolkit versions are pinned, and the
   downloads are checked against `pyxis-checksums/SHA256SUMS`. Upstream resolves
   the latest release at build time.
+- NCCL is in all three images, and `login_gpu_pyxis` has the `nccl` modulefile.
+  Upstream's images have neither.

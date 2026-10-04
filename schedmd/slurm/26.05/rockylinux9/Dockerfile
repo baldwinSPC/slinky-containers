@@ -23,6 +23,12 @@ ARG CUDA_HOME=/usr/local/cuda-12.9
 ARG ROCM_VERSION=7.2.4
 ARG ROCM_CORE=rocm-core-7.2.4.70204-93.el8
 ARG ROCM_SMI_LIB=rocm-smi-lib-7.8.0.70204-93.el8
+# The NCCL runtime library from the same CUDA repository, built for CUDA 12.9,
+# installed wherever nvml is built and in login-gpu. The RPMs must match these
+# sha256 sums.
+ARG NCCL_VERSION=2.32.3-1+cuda12.9
+ARG NCCL_SHA256_AMD64=cca47a5b99e93b726517f1fb63f0a949bad090d5c9a2e78ad9a53fe575b4c6b8
+ARG NCCL_SHA256_ARM64=e1eae906a66de1c36010d8b3d4f8745698a0e5fa3fc73323d9425fcddcb93980
 
 ################################################################################
 FROM ${ALPINE_IMAGE} AS slurm-src
@@ -61,6 +67,9 @@ ARG CUDA_HOME
 ARG ROCM_VERSION
 ARG ROCM_CORE
 ARG ROCM_SMI_LIB
+ARG NCCL_VERSION
+ARG NCCL_SHA256_AMD64
+ARG NCCL_SHA256_ARM64
 
 USER root
 WORKDIR /tmp/
@@ -84,16 +93,18 @@ arm64) GPU_AUTODETECT="${GPU_AUTODETECT_ARM64}" ;;
 *) GPU_AUTODETECT="" ;;
 esac
 # Runtime packages for the slurmd-gpu stage, verified here against their repository key.
-mkdir -p /root/gpu-rpms/
+mkdir -p /root/gpu-rpms/ /root/nccl-rpms/
 for gpu in ${GPU_AUTODETECT}; do
   case "${gpu}" in
   nvml)
     case "${TARGETARCH}" in
-    amd64) CUDA_REPO_ARCH=x86_64 ;;
-    arm64) CUDA_REPO_ARCH=sbsa ;;
+    amd64) CUDA_REPO_ARCH=x86_64 RPM_ARCH=x86_64 NCCL_SHA256="${NCCL_SHA256_AMD64}" ;;
+    arm64) CUDA_REPO_ARCH=sbsa RPM_ARCH=aarch64 NCCL_SHA256="${NCCL_SHA256_ARM64}" ;;
     esac
     dnf -q config-manager --add-repo "https://developer.download.nvidia.com/compute/cuda/repos/rhel9/${CUDA_REPO_ARCH}/cuda-rhel9.repo"
     dnf -q -y install --setopt='install_weak_deps=False' "${CUDA_NVML_DEVEL}"
+    dnf -q download --destdir=/root/nccl-rpms/ "libnccl-${NCCL_VERSION}.${RPM_ARCH}"
+    echo "${NCCL_SHA256}  /root/nccl-rpms/libnccl-${NCCL_VERSION}.${RPM_ARCH}.rpm" | sha256sum --check --strict
     ;;
   rsmi)
     if [ "${TARGETARCH}" != "amd64" ]; then
@@ -335,6 +346,7 @@ ARG TARGETARCH
 ARG GPU_AUTODETECT_AMD64
 ARG GPU_AUTODETECT_ARM64
 ARG ROCM_VERSION
+ARG NCCL_VERSION
 ARG SLURM_DIR
 
 USER root
@@ -350,7 +362,8 @@ COPY --from=slurm-src \
 # Slurm dlopens libnvidia-ml.so.1 or librocm_smi64.so itself when gres.conf sets
 # AutoDetect=nvml or AutoDetect=rsmi; neither plugin links the library.
 RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked \
-  --mount=type=bind,from=build,source=/root/gpu-rpms/,target=/tmp/gpu-rpms/ <<EOR
+  --mount=type=bind,from=build,source=/root/gpu-rpms/,target=/tmp/gpu-rpms/ \
+  --mount=type=bind,from=build,source=/root/nccl-rpms/,target=/tmp/nccl-rpms/ <<EOR
 # Install GPU Autodetect Runtime
 set -xeuo pipefail
 case "${TARGETARCH}" in
@@ -369,7 +382,11 @@ for gpu in ${GPU_AUTODETECT}; do
   fi
   case "${gpu}" in
   # The NVIDIA container toolkit injects libnvidia-ml.so.1 into GPU containers.
-  nvml) ;;
+  # NCCL is the runtime library only, verified in the build stage.
+  nvml)
+    dnf -q -y install --setopt='install_weak_deps=False' /tmp/nccl-rpms/libnccl-${NCCL_VERSION}.*.rpm
+    ldconfig -p | grep -F libnccl.so.2
+    ;;
   rsmi)
     dnf -q -y install --setopt='install_weak_deps=False' /tmp/gpu-rpms/*.rpm
     echo "/opt/rocm-${ROCM_VERSION}/lib" >/etc/ld.so.conf.d/rocm-smi.conf
@@ -516,6 +533,7 @@ FROM login AS login-gpu
 SHELL ["bash", "-c"]
 
 ARG SLURM_DIR
+ARG NCCL_VERSION
 
 # slurm.spec installs no licence file.
 COPY --from=slurm-src \
@@ -523,3 +541,29 @@ COPY --from=slurm-src \
   /workspace/${SLURM_DIR}/DISCLAIMER \
   /workspace/${SLURM_DIR}/LICENSE.OpenSSL \
   /usr/share/licenses/slurm/
+
+# Lmod is EPEL's, which openmpi already requires through environment(modules);
+# its /etc/profile.d/modules.sh defines module in a login shell, and
+# /etc/modulefiles is on its MODULEPATH.
+RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked \
+  --mount=type=bind,from=build,source=/root/nccl-rpms/,target=/tmp/nccl-rpms/ <<EOR
+# Install NCCL and its modulefile
+set -xeuo pipefail
+dnf -q -y install --setopt='install_weak_deps=False' \
+  Lmod \
+  /tmp/nccl-rpms/libnccl-${NCCL_VERSION}.*.rpm
+ldconfig -p | grep -F libnccl.so.2
+NCCL_RELEASE="${NCCL_VERSION%%-*}"
+mkdir -p /etc/modulefiles/nccl/
+cat >"/etc/modulefiles/nccl/${NCCL_RELEASE}.lua" <<MODULEFILE
+whatis("Name: NCCL")
+whatis("Version: ${NCCL_RELEASE}")
+whatis("Description: NVIDIA Collective Communications Library, libnccl ${NCCL_VERSION}")
+help([[NCCL ${NCCL_RELEASE} runtime library, libnccl.so.2 in /usr/lib64, from the libnccl ${NCCL_VERSION} RPM.]])
+family("nccl")
+setenv("NCCL_HOME", "/usr")
+MODULEFILE
+avail="$(bash -lc 'module -t avail 2>&1')"
+echo "${avail}"
+grep -qx "nccl/${NCCL_RELEASE}" <<<"${avail}"
+EOR
