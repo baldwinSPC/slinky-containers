@@ -29,6 +29,12 @@ on:
 permissions:
   contents: read
 
+# An unnamed shell runs as `bash -e {0}`, without pipefail, so a check piped to
+# tee would pass whatever it printed. Naming bash adds -o pipefail.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: slurmd-gpu-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
