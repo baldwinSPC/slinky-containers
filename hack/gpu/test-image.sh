@@ -7,6 +7,7 @@
 # Slurm is the same release as the given reference images. With --gpu-count it
 # also checks how many GPUs a plugin enumerates and registers, on a host whose
 # GPUs --device or --gpus passes to the slurmd -C and slurmd -G containers.
+# With --nccl it also checks that the NCCL runtime library is in the image.
 #
 # Prints PASS <id> or FAIL <id> for every assertion and then the counts. Exits 0
 # only when every planned assertion ran and passed.
@@ -24,6 +25,7 @@ usage: $(basename "$0") --image REF --platform PLATFORM --expect "nvml rsmi" [op
   --nvml-stub FILE         a libnvidia-ml.so.1 to mount for the load check; never part of an image
   --same-slurm-as BIN=REF  BIN -V in REF must print what slurmd -V prints in the image (repeatable)
   --pyxis                  the image must carry pyxis and enroot
+  --nccl                   the image must carry libnccl.so* under /usr, /opt, /lib or /lib64
   --plugins-of REF         every Slurm plugin slurmd can load from REF, the image this one
                            replaces, must be in the image too, less the exceptions below
   --device PATH            a host device to pass to the slurmd -C and slurmd -G containers,
@@ -43,6 +45,7 @@ EXPECT=""
 NVML_STUB=""
 SAME_AS=()
 PYXIS=false
+NCCL=false
 PLUGINS_OF=""
 DEVICES=()
 GPUS=""
@@ -71,6 +74,10 @@ while (($#)); do
 		;;
 	--pyxis)
 		PYXIS=true
+		shift
+		;;
+	--nccl)
+		NCCL=true
 		shift
 		;;
 	--plugins-of)
@@ -317,6 +324,9 @@ fi
 if $PYXIS; then
 	PLANNED=$((PLANNED + 3))
 fi
+if $NCCL; then
+	PLANNED=$((PLANNED + 1))
+fi
 if [[ -n $PLUGINS_OF ]]; then
 	PLANNED=$((PLANNED + 1))
 fi
@@ -454,6 +464,22 @@ if $PYXIS; then
 		check "pyxis/enroot" "$pyxis" "enroot $enroot_env"
 	else
 		fail "pyxis/enroot" "ENROOT_VERSION is not set in the image"
+	fi
+fi
+
+# The search a ClusterMAX harness runs in the slurmd pod. As for the driver
+# files, only paths count, and find reports its exit status last.
+if $NCCL; then
+	nccl_out="$(run_in "$IMAGE_REF" bash -c 'find /usr /opt /lib /lib64 -name "libnccl.so*" -print; echo "find exit $?"')"
+	nccl_files="$(grep '^/' <<<"$nccl_out" || true)"
+	echo "nccl: $(tr '\n' ' ' <<<"$nccl_files")"
+	if ! grep -qx 'find exit 0' <<<"$nccl_out"; then
+		fail "nccl/present" "find did not run to completion"
+		tail -n 25 <<<"$nccl_out" | sed 's/^/    | /'
+	elif [[ -z $nccl_files ]]; then
+		fail "nccl/present" "no libnccl.so* under /usr /opt /lib /lib64"
+	else
+		pass "nccl/present"
 	fi
 fi
 

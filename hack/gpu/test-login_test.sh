@@ -5,8 +5,9 @@
 # everything passes every check. Then one thing at a time goes missing: srun
 # does not offer --container-image because pyxis did not load, srun lists no
 # pmix, srun lists only the pmix_v3 version line, a plugin of the replaced
-# image is absent, and srun reports another Slurm release. Each must fail
-# exactly its own check, and every planned check must still run.
+# image is absent, srun reports another Slurm release, a login shell has no
+# module command, Lmod lists no nccl module, and libnccl is not in the image.
+# Each must fail exactly its own checks, and every planned check must still run.
 
 set -euo pipefail
 
@@ -20,8 +21,9 @@ cat >"$work/bin/docker" <<'EOF'
 # Answers the docker calls test-login.sh makes. The image under test is
 # test/login; any other image is the reference. NO_CONTAINER_IMAGE drops the
 # pyxis option from srun --help, MPI_LIST replaces srun --mpi=list's output,
-# MISSING_PLUGIN is left out of the image's plugin list, and SRUN_VERSION
-# replaces srun -V.
+# MISSING_PLUGIN is left out of the image's plugin list, SRUN_VERSION
+# replaces srun -V, NO_LMOD leaves a login shell without the module command,
+# NO_NCCL_MODULE leaves the nccl modulefile out, and NO_NCCL leaves libnccl out.
 if [[ $1 == image ]]; then
 	exit 0
 fi
@@ -46,6 +48,37 @@ case "$*" in
 	echo "plugstack.conf.d mode 755"
 	echo "enroot 4.2.1"
 	echo "env ENROOT_VERSION=4.2.1 PYXIS_VERSION=0.24.0"
+	;;
+*"module load nccl"*)
+	if [[ -n ${NO_LMOD:-} ]]; then
+		echo "bash: line 1: module: command not found"
+	elif [[ -n ${NO_NCCL_MODULE:-} ]]; then
+		echo "Lmod has detected the following error: The following module(s) are unknown: \"nccl\""
+	elif [[ -n ${NO_NCCL:-} ]]; then
+		echo "NCCL_HOME=/usr"
+		echo "ls: cannot access '/usr/lib64/libnccl.so.2': No such file or directory"
+	else
+		echo "NCCL_HOME=/usr"
+		echo "/usr/lib64/libnccl.so.2"
+	fi
+	;;
+*"module avail"*)
+	if [[ -n ${NO_LMOD:-} ]]; then
+		echo "bash: line 1: module: command not found"
+		echo "module exit 127"
+	else
+		echo "---------------------------- /opt/modulefiles/Core ----------------------------"
+		if [[ -z ${NO_NCCL_MODULE:-} ]]; then
+			echo "   nccl/2.32.3"
+		fi
+		echo "module exit 0"
+	fi
+	;;
+*"libnccl.so"*)
+	if [[ -z ${NO_NCCL:-} ]]; then
+		printf '%s\n' /usr/lib64/libnccl.so.2 /usr/lib64/libnccl.so.2.32.3
+	fi
+	echo "find exit 0"
 	;;
 *"srun --help"*)
 	echo "Usage: srun [OPTIONS(0)... [executable(0) [args(0)...]]]"
@@ -115,6 +148,9 @@ case_ "srun lists no pmix" "mpi/pmix" MPI_LIST='MPI plugin types are...\n\tnone\
 case_ "only the pmix version line" "mpi/pmix" MPI_LIST='MPI plugin types are...\n\tnone\n\tpmi2\nspecific pmix plugin versions available: pmix_v3'
 case_ "a plugin of the replaced image is absent" "plugins/parity" MISSING_PLUGIN=mpi_pmix.so
 case_ "another Slurm release" "version/slurmctld" SRUN_VERSION="slurm 26.05.3"
+case_ "a login shell without Lmod" "lmod/avail lmod/load" NO_LMOD=1
+case_ "Lmod lists no nccl module" "lmod/avail lmod/load" NO_NCCL_MODULE=1
+case_ "libnccl is not in the image" "lmod/load nccl/present" NO_NCCL=1
 
 if ((fails != 0)); then
 	echo "$fails case(s) failed"
