@@ -16,3 +16,4 @@ nvidia-container-toolkit	1.20.1-1	Apache-2.0	LICENSE at NVIDIA/nvidia-container-
 nvidia-container-toolkit-base	1.20.1-1	Apache-2.0	LICENSE at NVIDIA/nvidia-container-toolkit tag v1.20.1
 libnvidia-container1	1.20.1-1	Apache-2.0, and LGPL-3.0-or-later for the elfutils libelf it links	LICENSE and NOTICE at NVIDIA/libnvidia-container tag v1.20.0, the commit the toolkit v1.20.1 builds (3e428194)
 libnvidia-container-tools	1.20.1-1	Apache-2.0, and LGPL-3.0-or-later for the elfutils libelf it links	as libnvidia-container1
+libnccl	2.32.3-1+cuda12.9	Apache-2.0, with parts BSD-3-Clause; statically links the CUDA runtime, distributable under Attachment A of the CUDA Toolkit EULA	/usr/share/doc/libnccl/LICENSE.txt in the RPM, identical to LICENSE.txt at NVIDIA/nccl tag v2.32.3-1 (12df1a11); the RPM licence tag says Proprietary

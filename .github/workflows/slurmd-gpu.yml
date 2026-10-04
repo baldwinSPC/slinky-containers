@@ -118,7 +118,7 @@ jobs:
       - name: Test slurmd_gpu
         run: |
           hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu:${SLURM_TAG}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --nccl \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu-${{ matrix.arch }}.txt"
@@ -126,7 +126,7 @@ jobs:
       - name: Test slurmd_gpu_pyxis
         run: |
           hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu_pyxis:${SLURM_TAG}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis --nccl \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu_pyxis-${{ matrix.arch }}.txt"
@@ -154,28 +154,30 @@ jobs:
           grep -qE '^executed=([0-9]+) planned=\1 passed=[0-9]+ failed=1$' <<<"$out"
 
       # Upstream's rockylinux9 slurmd has no gpu_nvml or gpu_rsmi, no mpi_pmix,
-      # no compress_lz4 and no Slurm licence file; its slurmd-pyxis has no pyxis
-      # in it.
+      # no compress_lz4, no Slurm licence file and no NCCL; its slurmd-pyxis has
+      # no pyxis in it.
       - name: Control, upstream slurmd:26.05-rockylinux9
         run: |
           hack/gpu/control.sh --image "${CONTROL_SLURMD}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --nccl \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
-            --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm
+            --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
+            --also-fail nccl/present
 
       - name: Control, upstream slurmd-pyxis:26.05-rockylinux9
         run: |
           hack/gpu/control.sh --image "${CONTROL_SLURMD_PYXIS}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis --nccl \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
-            --also-fail pyxis/plugin --also-fail pyxis/plugstack --also-fail pyxis/enroot
+            --also-fail pyxis/plugin --also-fail pyxis/plugstack --also-fail pyxis/enroot \
+            --also-fail nccl/present
 
-      # Upstream's login-pyxis has no pyxis, no mpi_pmix, no compress_lz4 and no
-      # Slurm licence file, at the same Slurm release: every check but the
-      # version one must fail there.
+      # Upstream's login-pyxis has no pyxis, no mpi_pmix, no compress_lz4, no
+      # Slurm licence file and no NCCL or nccl module, at the same Slurm release:
+      # every check but the version one must fail there.
       - name: Control, upstream login-pyxis:26.05-rockylinux9
         run: |
           out="$(hack/gpu/test-login.sh --image "${CONTROL_LOGIN_PYXIS}" --platform '${{ matrix.platform }}' \
@@ -184,9 +186,9 @@ jobs:
           failed="$(sed -n 's/^FAIL \([^:]*\):.*/\1/p' <<<"$out" | sort | tr '\n' ' ')"
           passed="$(sed -n 's/^PASS \(.*\)$/\1/p' <<<"$out" | sort | tr '\n' ' ')"
           echo "failed: [${failed}] passed: [${passed}]"
-          [[ $failed == "licence/slurm mpi/pmix plugins/parity pyxis/enroot pyxis/plugin pyxis/plugstack srun/pyxis " ]]
+          [[ $failed == "licence/slurm lmod/avail lmod/load mpi/pmix nccl/present plugins/parity pyxis/enroot pyxis/plugin pyxis/plugstack srun/pyxis " ]]
           [[ $passed == "version/slurmctld " ]]
-          grep -qE '^executed=8 planned=8 passed=1 failed=7$' <<<"$out"
+          grep -qE '^executed=11 planned=11 passed=1 failed=10$' <<<"$out"
 
       - name: SBOM
         run: |
@@ -243,7 +245,7 @@ jobs:
             pyxis=()
             [[ $image == slurmd_gpu_pyxis ]] && pyxis=(--pyxis)
             hack/gpu/test-image.sh --image "${REGISTRY}/${image}@$(cat "${RUNNER_TEMP}/digests/${image}-${{ matrix.arch }}")" \
-              --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' "${pyxis[@]}" \
+              --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' "${pyxis[@]}" --nccl \
               --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
               --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
               --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/digests/test-${image}-${{ matrix.arch }}-pushed.txt"

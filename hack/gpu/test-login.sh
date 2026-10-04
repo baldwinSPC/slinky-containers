@@ -5,8 +5,9 @@
 # enroot, that srun loads the pyxis SPANK plugin from a plugstack.conf and
 # offers --container-image, that srun can load mpi/pmix, that its Slurm is the
 # release the reference images run, and that it carries every Slurm plugin the
-# login image it replaces carries. srun runs against a throwaway slurm.conf and
-# never contacts a controller.
+# login image it replaces carries, that a login shell's module avail lists an
+# nccl module and loading it finds libnccl, and that libnccl is in the image.
+# srun runs against a throwaway slurm.conf and never contacts a controller.
 #
 # Prints PASS <id> or FAIL <id> for every assertion and then the counts. Exits 0
 # only when every planned assertion ran and passed.
@@ -180,8 +181,9 @@ IMAGE_REF="$(platform_ref "$IMAGE")"
 echo "image:    $IMAGE"
 echo "run as:   $IMAGE_REF ($PLATFORM)"
 
-# Plan: 3 pyxis + 1 srun/pyxis + 1 mpi + 1 licence + 1 per reference + 1 parity.
-PLANNED=$((3 + 1 + 1 + 1 + ${#SAME_AS[@]}))
+# Plan: 3 pyxis + 1 srun/pyxis + 1 mpi + 1 licence + 2 lmod + 1 nccl + 1 per
+# reference + 1 parity.
+PLANNED=$((3 + 1 + 1 + 1 + 2 + 1 + ${#SAME_AS[@]}))
 if [[ -n $PLUGINS_OF ]]; then
 	PLANNED=$((PLANNED + 1))
 fi
@@ -223,6 +225,37 @@ fi
 # image carries Slurm's own.
 licence="$(run_in "$IMAGE_REF" bash -c 'for f in COPYING DISCLAIMER LICENSE.OpenSSL; do head -c 4096 "/usr/share/licenses/slurm/$f" >/dev/null && echo "have $f"; done')"
 check "licence/slurm" "$licence" "have COPYING" "have DISCLAIMER" "have LICENSE.OpenSSL" -- "No such file"
+
+# A login shell reads /etc/profile.d, where Lmod defines module. Lmod prints
+# avail on stderr. A ClusterMAX harness passes lmod when avail lists a cuda,
+# hpcx or nccl module.
+avail="$(run_in "$IMAGE_REF" bash -lc 'module avail 2>&1; echo "module exit $?"')"
+echo "$avail" | sed 's/^/lmod: /'
+if ! grep -qx 'module exit 0' <<<"$avail"; then
+	fail "lmod/avail" "module avail did not succeed in a login shell"
+elif ! grep -qE '(^|[[:space:]])nccl/[0-9]' <<<"$avail"; then
+	fail "lmod/avail" "module avail lists no nccl module"
+else
+	pass "lmod/avail"
+fi
+
+# The nccl module names an NCCL that is in the image.
+load="$(run_in "$IMAGE_REF" bash -lc 'module load nccl 2>&1 && echo "NCCL_HOME=$NCCL_HOME" && ls "$NCCL_HOME"/lib64/libnccl.so.2')"
+check "lmod/load" "$load" "NCCL_HOME=/" "/lib64/libnccl.so.2" -- "command not found" "No such file" "Lmod has detected"
+
+# The search a ClusterMAX harness runs; only paths count, and find reports its
+# exit status last.
+nccl_out="$(run_in "$IMAGE_REF" bash -c 'find /usr /opt /lib /lib64 -name "libnccl.so*" -print; echo "find exit $?"')"
+nccl_files="$(grep '^/' <<<"$nccl_out" || true)"
+echo "nccl: $(tr '\n' ' ' <<<"$nccl_files")"
+if ! grep -qx 'find exit 0' <<<"$nccl_out"; then
+	fail "nccl/present" "find did not run to completion"
+	tail -n 25 <<<"$nccl_out" | sed 's/^/    | /'
+elif [[ -z $nccl_files ]]; then
+	fail "nccl/present" "no libnccl.so* under /usr /opt /lib /lib64"
+else
+	pass "nccl/present"
+fi
 
 # Plugins in the replaced image that srun does not need, each with its reason.
 PLUGIN_EXCEPTIONS=(

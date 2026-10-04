@@ -9,7 +9,8 @@
 # printing its banner on stderr, with a driver file in the image, and with a
 # find that does not run. The GPU runs model the runtime: --gpus injects
 # libnvidia-ml.so.1 and must reach only slurmd -C and slurmd -G, and --device
-# must reach slurmd -G for the GPU to be seen.
+# must reach slurmd -G for the GPU to be seen. nccl/present runs with libnccl in
+# the image, with none, and with a find that does not run.
 
 set -euo pipefail
 
@@ -26,7 +27,8 @@ cat >"$work/bin/docker" <<'EOF'
 # REQUIRE_GPU, slurmd -G prints GRES_LOG only when --gpus or --device reached
 # it, and otherwise what the plugin logs with no GPU. PODMAN_BANNER prints
 # podman-docker's banner on every call, DRIVER_FILES are driver files in the
-# image, and FIND_FAILS makes find fail to start.
+# image, and FIND_FAILS makes find fail to start. NO_NCCL leaves libnccl out of
+# the image, and NCCL_FIND_FAILS makes the libnccl find fail to start.
 if [[ -n ${PODMAN_BANNER:-} ]]; then
 	echo "Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg." >&2
 fi
@@ -75,6 +77,18 @@ case "$*" in
 *"--entrypoint slurmd test/gpu:1 -V"*) echo "slurm 26.05.4" ;;
 *"ls -1 /usr/lib64/slurm/"*) echo "gpu_${image_gpus}.so" ;;
 *"/usr/share/licenses/slurm/"*) printf 'have COPYING\nhave DISCLAIMER\nhave LICENSE.OpenSSL\n1\n' ;;
+*"libnccl.so"*)
+	if [[ -n ${NCCL_FIND_FAILS:-} ]]; then
+		echo "bash: line 1: find: command not found" >&2
+		exit 127
+	fi
+	if [[ -z ${NO_NCCL:-} ]]; then
+		printf '%s\n' /usr/lib64/libnccl.so.2 /usr/lib64/libnccl.so.2.32.3
+	fi
+	if [[ $* == *"find exit"* ]]; then
+		echo "find exit 0"
+	fi
+	;;
 *"nvml.h"*)
 	if [[ -n ${FIND_FAILS:-} ]]; then
 		echo "bash: line 1: find: command not found" >&2
@@ -200,5 +214,17 @@ check "gpus-absent" "$(verdict probe/nvml "$(harness_run nogpus "$NVML_AGREE" IM
 	--expect nvml --gpu-count nvml=1)")" \
 	"PASS probe/nvml|executed=8 planned=8 passed=7 failed=1|"
 
+check "nccl-present" "$(verdict nccl/present "$(harness_run nccl "$AGREE" -- --expect rsmi --nccl)")" \
+	"PASS nccl/present|executed=8 planned=8 passed=8 failed=0|"
+
+check "nccl-absent" "$(verdict nccl/present "$(harness_run nonccl "$AGREE" NO_NCCL=1 -- --expect rsmi --nccl)")" \
+	"FAIL nccl/present: no libnccl.so* under /usr /opt /lib /lib64|executed=8 planned=8 passed=7 failed=1|"
+
+check "nccl-find-did-not-run" "$(verdict nccl/present "$(harness_run ncclnofind "$AGREE" NCCL_FIND_FAILS=1 -- --expect rsmi --nccl)")" \
+	"FAIL nccl/present: find did not run to completion|executed=8 planned=8 passed=7 failed=1|"
+
+check "nccl-not-asked" "$(verdict nccl/present "$(harness_run ncclnotasked "$AGREE" NO_NCCL=1 -- --expect rsmi)")" \
+	"executed=7 planned=7 passed=7 failed=0|"
+
 echo "executed=$EXECUTED failed=$FAILED"
-((EXECUTED == 13 && FAILED == 0))
+((EXECUTED == 17 && FAILED == 0))
