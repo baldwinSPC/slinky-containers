@@ -87,7 +87,7 @@ Tags \`${SLURM_TAG}\` and \`${SLURM_TAG%.*}-rockylinux9\` pointed at these index
 - **Slurm ${slurm_version}**, GPL-2.0-or-later with the OpenSSL exception: <https://github.com/SchedMD/slurm/archive/${archive}.tar.gz>, sha256 \`${slurm_sha256}\`, tag \`${archive}\`. The build checks the sha256.
 - **Build definition:** ${repo_url}/tree/${GITHUB_SHA}, \`schedmd/slurm/26.05/rockylinux9/\`. The provenance attestation on each image records the same commit and the build arguments.
 - **Base image:** \`${parent_image}\`. The attached \`*.tsv\` files list every RPM in each image, with its licence tag and source RPM. The source for Rocky Linux and EPEL packages is in those distributions' source repositories.
-- **enroot ${enroot}** and **pyxis ${pyxis}** (Apache-2.0) and **nvidia-container-toolkit ${toolkit}** (Apache-2.0; libnvidia-container links elfutils libelf, LGPL-3.0-or-later) are in \`slurmd_gpu_pyxis\`.
+- **enroot ${enroot}** and **pyxis ${pyxis}** (Apache-2.0) and **nvidia-container-toolkit ${toolkit}** (Apache-2.0; libnvidia-container links elfutils libelf, LGPL-3.0-or-later) are in \`slurmd_gpu_pyxis\` and \`login_gpu_pyxis\`.
 - Notices: ${repo_url}/blob/${GITHUB_SHA}/NOTICE-GPU.md
 
 ## Checks

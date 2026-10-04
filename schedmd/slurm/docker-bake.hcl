@@ -350,10 +350,41 @@ target "slurmd_gpu_pyxis" {
   }
 }
 
+# The login image srun runs on, with pyxis, built from the same Slurm build as
+# slurmd_gpu. srun loads the pyxis SPANK plugin on the submitting side, and the
+# MPI plugin --mpi names, so the login needs pyxis and mpi_pmix too. Upstream's
+# login:26.05-rockylinux9 has no mpi_pmix, and its login-pyxis has no pyxis.
+# login_gpu is a build stage of login_gpu_pyxis and is not published.
+target "login_gpu" {
+  inherits = ["_login", "_gpu"]
+  context = context
+  target = "login-gpu"
+  tags = [
+    format_tag(REGISTRY, "login_gpu", slurm_version(slurm_version), linux_flavor, SUFFIX),
+    format_tag(REGISTRY, "login_gpu", slurm_version, linux_flavor, SUFFIX),
+  ]
+}
+
+target "login_gpu_pyxis" {
+  inherits = ["_login", "_pyxis"]
+  target = "login-pyxis"
+  tags = [
+    format_tag(REGISTRY, "login_gpu_pyxis", slurm_version(slurm_version), linux_flavor, SUFFIX),
+    format_tag(REGISTRY, "login_gpu_pyxis", slurm_version, linux_flavor, SUFFIX),
+  ]
+  contexts = {
+    format_tag(REGISTRY, "slurmd", slurm_version(slurm_version), linux_flavor, SUFFIX) = "target:slurmd_gpu"
+    format_tag(REGISTRY, "slurmd", slurm_version, linux_flavor, SUFFIX) = "target:slurmd_gpu"
+    format_tag(REGISTRY, "login", slurm_version(slurm_version), linux_flavor, SUFFIX) = "target:login_gpu"
+    format_tag(REGISTRY, "login", slurm_version, linux_flavor, SUFFIX) = "target:login_gpu"
+  }
+}
+
 group "gpu-multiarch" {
   targets = [
     "slurmd_gpu_multiarch",
     "slurmd_gpu_pyxis_multiarch",
+    "login_gpu_pyxis_multiarch",
   ]
 }
 
@@ -363,6 +394,10 @@ target "slurmd_gpu_multiarch" {
 
 target "slurmd_gpu_pyxis_multiarch" {
   inherits = ["slurmd_gpu_pyxis", "_multiarch"]
+}
+
+target "login_gpu_pyxis_multiarch" {
+  inherits = ["login_gpu_pyxis", "_multiarch"]
 }
 
 ################################################################################

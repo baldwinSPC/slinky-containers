@@ -509,3 +509,17 @@ COPY files/usr/local/bin/login-entrypoint.sh /usr/local/bin/entrypoint.sh
 
 EXPOSE 22/tcp
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+################################################################################
+FROM login AS login-gpu
+
+SHELL ["bash", "-c"]
+
+ARG SLURM_DIR
+
+# slurm.spec installs no licence file.
+COPY --from=slurm-src \
+  /workspace/${SLURM_DIR}/COPYING \
+  /workspace/${SLURM_DIR}/DISCLAIMER \
+  /workspace/${SLURM_DIR}/LICENSE.OpenSSL \
+  /usr/share/licenses/slurm/

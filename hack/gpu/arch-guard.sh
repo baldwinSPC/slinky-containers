@@ -3,19 +3,26 @@
 #
 # Checks that a published multi-platform image carries exactly the platforms it
 # claims, and that what is inside each one was built for it: the image config's
-# os/architecture, and the ELF machine of slurmd and of every gpu plugin.
+# os/architecture, and the ELF machine of the image's binary (slurmd unless
+# --binary names another) and of every gpu plugin.
 # Attestation manifests (vnd.docker.reference.type=attestation-manifest) are
 # counted separately; an index lists them as unknown/unknown.
 #
 # Nothing is run: files are copied out of created containers and their ELF
 # headers read on the host, so one runner checks every platform.
 #
-# usage: arch-guard.sh REF PLATFORM... e.g. arch-guard.sh ghcr.io/o/i@sha256:... linux/amd64 linux/arm64
+# usage: arch-guard.sh [--binary PATH] REF PLATFORM...
+#   e.g. arch-guard.sh ghcr.io/o/i@sha256:... linux/amd64 linux/arm64
 
 set -euo pipefail
 
+BINARY=/usr/sbin/slurmd
+if [[ ${1:-} == --binary ]]; then
+	BINARY="${2:?--binary needs a path}"
+	shift 2
+fi
 if (($# < 2)); then
-	echo "usage: $(basename "$0") REF PLATFORM..." >&2
+	echo "usage: $(basename "$0") [--binary PATH] REF PLATFORM..." >&2
 	exit 2
 fi
 REF="$1"
@@ -133,12 +140,12 @@ while IFS=$'\t' read -r digest platform; do
 	# By manifest digest and without --platform: the files are checked against
 	# the platform the index claims, even when the image says otherwise.
 	docker pull --quiet "$REPO@$digest" >/dev/null 2>&1 || true
-	if ! cid="$(docker create "$REPO@$digest" /usr/sbin/slurmd 2>/dev/null)"; then
+	if ! cid="$(docker create "$REPO@$digest" "$BINARY" 2>/dev/null)"; then
 		fail "$id/elf" "could not create a container from $REPO@$digest"
 		continue
 	fi
 	mkdir -p "$work/$arch"
-	files=(/usr/sbin/slurmd)
+	files=("$BINARY")
 	if docker cp "$cid:/usr/lib64/slurm/." "$work/$arch/plugins" >/dev/null 2>&1; then
 		for f in "$work/$arch/plugins"/gpu_*.so; do
 			[[ -e $f ]] && files+=("/usr/lib64/slurm/$(basename "$f")")

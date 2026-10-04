@@ -1,8 +1,8 @@
 ---
-# Builds and checks the slurmd_gpu and slurmd_gpu_pyxis images on native amd64
-# and arm64 runners. Publishing is a manual run on main with publish=true: the
-# images are pushed by digest, the pushed digests are checked again, and only
-# then does the multi-platform index get its tags.
+# Builds and checks the slurmd_gpu, slurmd_gpu_pyxis and login_gpu_pyxis images
+# on native amd64 and arm64 runners. Publishing is a manual run on main with
+# publish=true: the images are pushed by digest, the pushed digests are checked
+# again, and only then does the multi-platform index get its tags.
 name: slurmd-gpu
 
 on:
@@ -29,6 +29,12 @@ on:
 permissions:
   contents: read
 
+# An unnamed shell runs as `bash -e {0}`, without pipefail, so a check piped to
+# tee would pass whatever it printed. Naming bash adds -o pipefail.
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: slurmd-gpu-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -48,6 +54,10 @@ env:
   # fork's changes: the tests must fail there.
   CONTROL_SLURMD: ghcr.io/slinkyproject/slurmd@sha256:4b9df5b286f30a61eef62659ab62eba0809a6548a554640bb44998a12f987bad
   CONTROL_SLURMD_PYXIS: ghcr.io/slinkyproject/slurmd-pyxis@sha256:ceaba4e9e8e8fa2d003e01a681eb588341a1782f177cf1d9f3a9a3f9d19efd1d
+  CONTROL_LOGIN_PYXIS: ghcr.io/slinkyproject/login-pyxis@sha256:3c7fd3580fa026277b7dd0d6b91c616fec112de6b4160ab77b8e9c14988c0a64
+  # The 26.05-ubuntu26.04 login the Slurm cluster pinned before login_gpu_pyxis:
+  # login_gpu_pyxis must carry every plugin it carries.
+  STOCK_LOGIN: ghcr.io/slinkyproject/login@sha256:9578f6773891a9eee75395c60c7f5acad1385ceb6e715c8c76f606ccfd89968d
 
 jobs:
   build:
@@ -83,6 +93,9 @@ jobs:
       - name: Test the GPU count verdicts
         run: hack/gpu/test-image_test.sh
 
+      - name: Test the login check verdicts
+        run: hack/gpu/test-login_test.sh
+
       - name: Build the NVML test stub
         run: |
           docker buildx build --platform '${{ matrix.platform }}' \
@@ -100,7 +113,7 @@ jobs:
           docker buildx bake \
             --file docker-bake.hcl --file 26.05/rockylinux9/slurm.hcl --file 26.05/rockylinux9/gpu.hcl \
             --set '*.platform=${{ matrix.platform }}' --load --progress=plain \
-            slurmd_gpu slurmd_gpu_pyxis
+            slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis
 
       - name: Test slurmd_gpu
         run: |
@@ -117,6 +130,13 @@ jobs:
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu_pyxis-${{ matrix.arch }}.txt"
+
+      - name: Test login_gpu_pyxis
+        run: |
+          hack/gpu/test-login.sh --image "local/slinky/login_gpu_pyxis:${SLURM_TAG}" \
+            --platform '${{ matrix.platform }}' \
+            --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+            --plugins-of "${STOCK_LOGIN}" | tee "${RUNNER_TEMP}/test-login_gpu_pyxis-${{ matrix.arch }}.txt"
 
       # The runner has no AMD GPU: rsmi detects and registers 0, and a count of
       # 1 fails on count/rsmi alone.
@@ -153,10 +173,25 @@ jobs:
             --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
             --also-fail pyxis/plugin --also-fail pyxis/plugstack --also-fail pyxis/enroot
 
+      # Upstream's login-pyxis has no pyxis, no mpi_pmix, no compress_lz4 and no
+      # Slurm licence file, at the same Slurm release: every check but the
+      # version one must fail there.
+      - name: Control, upstream login-pyxis:26.05-rockylinux9
+        run: |
+          out="$(hack/gpu/test-login.sh --image "${CONTROL_LOGIN_PYXIS}" --platform '${{ matrix.platform }}' \
+            --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" --plugins-of "${STOCK_LOGIN}" || true)"
+          echo "$out"
+          failed="$(sed -n 's/^FAIL \([^:]*\):.*/\1/p' <<<"$out" | sort | tr '\n' ' ')"
+          passed="$(sed -n 's/^PASS \(.*\)$/\1/p' <<<"$out" | sort | tr '\n' ' ')"
+          echo "failed: [${failed}] passed: [${passed}]"
+          [[ $failed == "licence/slurm mpi/pmix plugins/parity pyxis/enroot pyxis/plugin pyxis/plugstack srun/pyxis " ]]
+          [[ $passed == "version/slurmctld " ]]
+          grep -qE '^executed=8 planned=8 passed=1 failed=7$' <<<"$out"
+
       - name: SBOM
         run: |
           mkdir -p "${RUNNER_TEMP}/sbom"
-          for image in slurmd_gpu slurmd_gpu_pyxis; do
+          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis; do
             hack/gpu/sbom.sh --image "local/slinky/${image}:${SLURM_TAG}" --platform '${{ matrix.platform }}' \
               >"${RUNNER_TEMP}/sbom/${image}-${{ matrix.arch }}.tsv"
             hack/gpu/sbom.sh --image "local/slinky/${image}:${SLURM_TAG}" --platform '${{ matrix.platform }}' \
@@ -188,12 +223,13 @@ jobs:
             --set '*.platform=${{ matrix.platform }}' \
             --set "slurmd_gpu.tags=${REGISTRY}/slurmd_gpu" \
             --set "slurmd_gpu_pyxis.tags=${REGISTRY}/slurmd_gpu_pyxis" \
+            --set "login_gpu_pyxis.tags=${REGISTRY}/login_gpu_pyxis" \
             --set '*.output=type=image,push-by-digest=true,name-canonical=true,push=true' \
             --provenance=mode=max --sbom=true \
             --metadata-file "${RUNNER_TEMP}/metadata.json" --progress=plain \
-            slurmd_gpu slurmd_gpu_pyxis
+            slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis
           mkdir -p "${RUNNER_TEMP}/digests"
-          for image in slurmd_gpu slurmd_gpu_pyxis; do
+          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis; do
             digest="$(jq -r --arg t "$image" '.[$t]["containerimage.digest"]' "${RUNNER_TEMP}/metadata.json")"
             echo "${image} ${{ matrix.platform }} ${digest}"
             echo "${digest}" >"${RUNNER_TEMP}/digests/${image}-${{ matrix.arch }}"
@@ -212,6 +248,10 @@ jobs:
               --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
               --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/digests/test-${image}-${{ matrix.arch }}-pushed.txt"
           done
+          hack/gpu/test-login.sh --image "${REGISTRY}/login_gpu_pyxis@$(cat "${RUNNER_TEMP}/digests/login_gpu_pyxis-${{ matrix.arch }}")" \
+            --platform '${{ matrix.platform }}' \
+            --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+            --plugins-of "${STOCK_LOGIN}" | tee "${RUNNER_TEMP}/digests/test-login_gpu_pyxis-${{ matrix.arch }}-pushed.txt"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: env.PUBLISH == 'true'
@@ -256,7 +296,7 @@ jobs:
       - name: Tag the multi-platform indexes
         run: |
           : >"${RUNNER_TEMP}/indexes"
-          for image in slurmd_gpu slurmd_gpu_pyxis; do
+          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis; do
             amd64="$(cat "${RUNNER_TEMP}/digests/${image}-amd64")"
             arm64="$(cat "${RUNNER_TEMP}/digests/${image}-arm64")"
             docker buildx imagetools create \
@@ -274,7 +314,10 @@ jobs:
       - name: Architecture guard
         run: |
           while read -r image index _ _; do
-            hack/gpu/arch-guard.sh "${REGISTRY}/${image}@${index}" linux/amd64 linux/arm64
+            # The login runs no slurmd; srun is the binary it is there for.
+            binary=/usr/sbin/slurmd
+            [[ $image == login_gpu_pyxis ]] && binary=/usr/bin/srun
+            hack/gpu/arch-guard.sh --binary "$binary" "${REGISTRY}/${image}@${index}" linux/amd64 linux/arm64
           done <"${RUNNER_TEMP}/indexes"
 
       # The Slurm source the images were built from travels with them (GPL-2.0).
