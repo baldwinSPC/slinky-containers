@@ -91,12 +91,18 @@ builds it into an RPM with its autotools build and runs its unit tests, so
 `rpm -q lbnl-nhc` reports `1.4.3-1.el9` and the SBOM lists it. It installs
 `/usr/sbin/nhc`, `nhc-genconf` and `nhc-wrapper`, the helpers
 `node-mark-offline` and `node-mark-online` in `/usr/libexec/nhc/`, the check
-libraries in `/etc/nhc/scripts/`, and `/etc/logrotate.d/nhc`. The only change
-from the archive is the first line of the three `/usr/sbin` scripts and the two
-helpers, which EL9's rpmbuild rewrites from `#!/bin/bash` to `#!/usr/bin/bash`.
-`/etc/nhc/nhc.conf` is replaced by a file of two comment lines, so `nhc` run
-without `-c` runs no checks and exits 0; the archive's sample configuration runs
-checks and is not installed.
+libraries in `/etc/nhc/scripts/`, and `/etc/logrotate.d/nhc`. The archive and
+`make install` leave out `scripts/csc_nvidia_smi.nhc` (the
+`check_nvsmi_healthmon` check, by Johan Guldmyr of CSC), so the build fetches it
+from the same commit, checks it against sha256
+`3834facd81f03c95c797ce4af6aae665ea9fc8b2795b975c36ba369f219971f1`, and installs
+it beside the others. It carries no licence of its own and is distributed under
+the repository's `LICENSE`. The only change from the archive is the first line
+of the three `/usr/sbin` scripts and the two helpers, which EL9's rpmbuild
+rewrites from `#!/bin/bash` to `#!/usr/bin/bash`. `/etc/nhc/nhc.conf` is
+replaced by a file of two comment lines, so `nhc` run without `-c` runs no
+checks and exits 0; the archive's sample configuration runs checks and is not
+installed.
 
 `LICENSE` at that commit, carried in the images at
 `/usr/share/licenses/lbnl-nhc/LICENSE`, opens:

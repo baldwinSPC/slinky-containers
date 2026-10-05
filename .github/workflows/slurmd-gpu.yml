@@ -186,7 +186,7 @@ jobs:
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
             --also-fail nccl/present --also-fail nhc/installed --also-fail nhc/version \
-            --also-fail nhc/empty --also-fail nhc/default --also-fail nhc/runs
+            --also-fail nhc/empty --also-fail nhc/default --also-fail nhc/runs --also-fail nhc/sysconfig
 
       - name: Control, upstream slurmd-pyxis:26.05-rockylinux9
         run: |
@@ -197,7 +197,7 @@ jobs:
             --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
             --also-fail pyxis/plugin --also-fail pyxis/plugstack --also-fail pyxis/enroot \
             --also-fail nccl/present --also-fail nhc/installed --also-fail nhc/version \
-            --also-fail nhc/empty --also-fail nhc/default --also-fail nhc/runs
+            --also-fail nhc/empty --also-fail nhc/default --also-fail nhc/runs --also-fail nhc/sysconfig
 
       # Upstream's login-pyxis has no pyxis, no mpi_pmix, no compress_lz4, no
       # Slurm licence file and no NCCL or nccl module, at the same Slurm release:

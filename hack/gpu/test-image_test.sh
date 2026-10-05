@@ -12,7 +12,8 @@
 # must reach slurmd -G for the GPU to be seen. nccl/present runs with libnccl in
 # the image, with none, and with a find that does not run. The nhc checks run
 # with NHC 1.4.3 installed, with none, with an nhc.conf that configures a check,
-# with another nhc, and with an nhc that exits 0 whatever it is given.
+# with another nhc, with an nhc that exits 0 whatever it is given, without
+# csc_nvidia_smi.nhc, and with an nhc that ignores /etc/sysconfig/nhc.
 
 set -euo pipefail
 
@@ -32,7 +33,9 @@ cat >"$work/bin/docker" <<'EOF'
 # image, and FIND_FAILS makes find fail to start. NO_NCCL leaves libnccl out of
 # the image, and NCCL_FIND_FAILS makes the libnccl find fail to start. NO_NHC
 # leaves NHC out of the image, NHC_CONF_CHECKS gives its nhc.conf a check line,
-# NHC_OTHER installs another nhc, and NHC_VACUOUS makes nhc exit 0 on any config.
+# NHC_OTHER installs another nhc, NHC_VACUOUS makes nhc exit 0 on any config,
+# NHC_NO_CSC leaves csc_nvidia_smi.nhc out, and NHC_NO_SYSCONFIG makes nhc
+# ignore /etc/sysconfig/nhc.
 if [[ -n ${PODMAN_BANNER:-} ]]; then
 	echo "Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg." >&2
 fi
@@ -80,16 +83,21 @@ case "$*" in
 	;;
 *"/usr/sbin/nhc"*)
 	if [[ -n ${NO_NHC:-} ]]; then
+		printf 'have %s\n' /usr/bin/sinfo /usr/bin/scontrol /etc/sysconfig/
 		echo "rpm lbnl-nhc "
 		echo "nhc.conf check lines "
-		for run in empty default failing; do
-			echo "bash: line 1: nhc: command not found"
+		for run in empty default failing "sysconfig empty" "sysconfig sysconfig-fail"; do
+			echo "timeout: failed to run command 'nhc': No such file or directory"
 			echo "nhc $run exit 127"
 		done
 		exit 0
 	fi
 	printf 'have %s\n' /usr/sbin/nhc /usr/libexec/nhc/node-mark-offline /usr/libexec/nhc/node-mark-online \
-		/etc/nhc/scripts/common.nhc
+		/usr/bin/sinfo /usr/bin/scontrol /etc/nhc/scripts/common.nhc
+	if [[ -z ${NHC_NO_CSC:-} ]]; then
+		echo "have /etc/nhc/scripts/csc_nvidia_smi.nhc"
+	fi
+	echo "have /etc/sysconfig/"
 	echo "have nhc licence"
 	if [[ -n ${NHC_OTHER:-} ]]; then
 		echo "rpm lbnl-nhc 1.4.2"
@@ -113,6 +121,14 @@ case "$*" in
 	else
 		echo "ERROR:  nhc:  Health check failed:  check_file_test:  -r /nonexistent/nhc-test returned 1."
 		echo "nhc failing exit 1"
+	fi
+	echo "nhc sysconfig empty exit 0"
+	if [[ -n ${NHC_NO_SYSCONFIG:-} || -n ${NHC_VACUOUS:-} ]]; then
+		echo "nhc sysconfig sysconfig-fail exit 0"
+	else
+		echo "ERROR:  nhc:  Health check failed:  check_file_test:  -r /nonexistent/nhc-sysconfig-test returned 1."
+		echo "20261005 03:11:42 /usr/libexec/nhc/node-mark-offline nhc-sysconfig-host check_file_test:  -r /nonexistent/nhc-sysconfig-test returned 1."
+		echo "nhc sysconfig sysconfig-fail exit 1"
 	fi
 	;;
 *"--entrypoint slurmd test/gpu:1 -V"*) echo "slurm 26.05.4" ;;
@@ -273,22 +289,28 @@ nhc_verdicts() {
 }
 
 check "nhc-present" "$(nhc_verdicts "$(harness_run nhc "$AGREE" -- --expect rsmi --nhc)")" \
-	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|executed=12 planned=12 passed=12 failed=0|"
+	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|PASS nhc/sysconfig|executed=13 planned=13 passed=13 failed=0|"
 
 check "nhc-absent" "$(nhc_verdicts "$(harness_run nonhc "$AGREE" NO_NHC=1 -- --expect rsmi --nhc)")" \
-	"FAIL nhc/installed: missing: have /usr/sbin/nhc|FAIL nhc/version: missing: rpm lbnl-nhc 1.4.3|FAIL nhc/empty: missing: nhc empty exit 0|FAIL nhc/default: missing: nhc.conf check lines 0|FAIL nhc/runs: missing: Health check failed:  check_file_test|executed=12 planned=12 passed=7 failed=5|"
+	"FAIL nhc/installed: missing: have /usr/sbin/nhc|FAIL nhc/version: missing: rpm lbnl-nhc 1.4.3|FAIL nhc/empty: missing: nhc empty exit 0|FAIL nhc/default: missing: nhc.conf check lines 0|FAIL nhc/runs: missing: check_file_test:  -r /nonexistent/nhc-test returned|FAIL nhc/sysconfig: missing: nhc sysconfig empty exit 0|executed=13 planned=13 passed=7 failed=6|"
+
+check "nhc-no-csc-script" "$(nhc_verdicts "$(harness_run nhcnocsc "$AGREE" NHC_NO_CSC=1 -- --expect rsmi --nhc)")" \
+	"FAIL nhc/installed: missing: have /etc/nhc/scripts/csc_nvidia_smi.nhc|PASS nhc/version|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|PASS nhc/sysconfig|executed=13 planned=13 passed=12 failed=1|"
 
 check "nhc-conf-checks" "$(nhc_verdicts "$(harness_run nhcconf "$AGREE" NHC_CONF_CHECKS=1 -- --expect rsmi --nhc)")" \
-	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|FAIL nhc/default: missing: nhc.conf check lines 0|PASS nhc/runs|executed=12 planned=12 passed=11 failed=1|"
+	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|FAIL nhc/default: missing: nhc.conf check lines 0|PASS nhc/runs|PASS nhc/sysconfig|executed=13 planned=13 passed=12 failed=1|"
 
 check "nhc-other-version" "$(nhc_verdicts "$(harness_run nhcother "$AGREE" NHC_OTHER=1 -- --expect rsmi --nhc)")" \
-	"PASS nhc/installed|FAIL nhc/version: missing: rpm lbnl-nhc 1.4.3|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|executed=12 planned=12 passed=11 failed=1|"
+	"PASS nhc/installed|FAIL nhc/version: missing: rpm lbnl-nhc 1.4.3|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|PASS nhc/sysconfig|executed=13 planned=13 passed=12 failed=1|"
 
 check "nhc-vacuous" "$(nhc_verdicts "$(harness_run nhcvacuous "$AGREE" NHC_VACUOUS=1 -- --expect rsmi --nhc)")" \
-	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|PASS nhc/default|FAIL nhc/runs: missing: Health check failed:  check_file_test|executed=12 planned=12 passed=11 failed=1|"
+	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|PASS nhc/default|FAIL nhc/runs: missing: check_file_test:  -r /nonexistent/nhc-test returned|FAIL nhc/sysconfig: missing: node-mark-offline nhc-sysconfig-host check_file_test:  -r /nonexistent/nhc-sysconfig-test returned|executed=13 planned=13 passed=11 failed=2|"
+
+check "nhc-sysconfig-ignored" "$(nhc_verdicts "$(harness_run nhcnosys "$AGREE" NHC_NO_SYSCONFIG=1 -- --expect rsmi --nhc)")" \
+	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|FAIL nhc/sysconfig: missing: node-mark-offline nhc-sysconfig-host check_file_test:  -r /nonexistent/nhc-sysconfig-test returned|executed=13 planned=13 passed=12 failed=1|"
 
 check "nhc-not-asked" "$(nhc_verdicts "$(harness_run nhcnotasked "$AGREE" NO_NHC=1 -- --expect rsmi)")" \
 	"executed=7 planned=7 passed=7 failed=0|"
 
 echo "executed=$EXECUTED failed=$FAILED"
-((EXECUTED == 23 && FAILED == 0))
+((EXECUTED == 25 && FAILED == 0))
