@@ -8,6 +8,10 @@
 # also checks how many GPUs a plugin enumerates and registers, on a host whose
 # GPUs --device or --gpus passes to the slurmd -C and slurmd -G containers.
 # With --nccl it also checks that the NCCL runtime library is in the image.
+# With --nhc it also checks that LBNL Node Health Check 1.4.3 is installed with
+# the helpers and scripts a deployment uses, that its installed configuration
+# runs no checks, that a failing check fails, and that nhc reads
+# /etc/sysconfig/nhc.
 #
 # Prints PASS <id> or FAIL <id> for every assertion and then the counts. Exits 0
 # only when every planned assertion ran and passed.
@@ -26,6 +30,8 @@ usage: $(basename "$0") --image REF --platform PLATFORM --expect "nvml rsmi" [op
   --same-slurm-as BIN=REF  BIN -V in REF must print what slurmd -V prints in the image (repeatable)
   --pyxis                  the image must carry pyxis and enroot
   --nccl                   the image must carry libnccl.so* under /usr, /opt, /lib or /lib64
+  --nhc                    the image must carry LBNL NHC 1.4.3 at /usr/sbin/nhc with its
+                           helpers and licence, and an /etc/nhc/nhc.conf that runs no checks
   --plugins-of REF         every Slurm plugin slurmd can load from REF, the image this one
                            replaces, must be in the image too, less the exceptions below
   --device PATH            a host device to pass to the slurmd -C and slurmd -G containers,
@@ -46,6 +52,7 @@ NVML_STUB=""
 SAME_AS=()
 PYXIS=false
 NCCL=false
+NHC=false
 PLUGINS_OF=""
 DEVICES=()
 GPUS=""
@@ -78,6 +85,10 @@ while (($#)); do
 		;;
 	--nccl)
 		NCCL=true
+		shift
+		;;
+	--nhc)
+		NHC=true
 		shift
 		;;
 	--plugins-of)
@@ -327,6 +338,9 @@ fi
 if $NCCL; then
 	PLANNED=$((PLANNED + 1))
 fi
+if $NHC; then
+	PLANNED=$((PLANNED + 6))
+fi
 if [[ -n $PLUGINS_OF ]]; then
 	PLANNED=$((PLANNED + 1))
 fi
@@ -481,6 +495,62 @@ if $NCCL; then
 	else
 		pass "nccl/present"
 	fi
+fi
+
+# NHC prints no version, so the version is the RPM's and /usr/sbin/nhc must be
+# the file the 1.4.3 release ships below its first line, which rpmbuild on EL9
+# rewrites from #!/bin/bash to #!/usr/bin/bash. Each run reports its exit
+# status last, so a run that did not happen is not read as one that passed.
+# nhc/runs is the control on nhc/empty and nhc/default: an nhc that exits 0
+# whatever it is given fails it. nhc/sysconfig runs nhc with no arguments, as
+# HealthCheckProgram does, under an /etc/sysconfig/nhc that sets CONFFILE,
+# NHC_RM, LOGFILE and HOSTNAME: an empty CONFFILE must exit 0, and a failing
+# one must fail under that HOSTNAME, which shows the file was read.
+NHC_VERSION=1.4.3
+NHC_BODY_SHA256=b05afaf9fb2da27714efec8436ae46a86bd08ec0a8e6d50d23df93f0c221a561
+if $NHC; then
+	nhc_out="$(run_in "$IMAGE_REF" bash -c '
+		for f in /usr/sbin/nhc /usr/libexec/nhc/node-mark-offline /usr/libexec/nhc/node-mark-online \
+			/usr/bin/sinfo /usr/bin/scontrol; do
+			[ -x "$f" ] && echo "have $f"
+		done
+		for f in /etc/nhc/scripts/common.nhc /etc/nhc/scripts/csc_nvidia_smi.nhc; do
+			[ -f "$f" ] && echo "have $f"
+		done
+		[ -d /etc/sysconfig ] && echo "have /etc/sysconfig/"
+		grep -q "Lawrence Berkeley National Laboratory" /usr/share/licenses/lbnl-nhc/LICENSE &&
+			grep -q "(\"Enhancements\")" /usr/share/licenses/lbnl-nhc/LICENSE && echo "have nhc licence"
+		echo "rpm lbnl-nhc $(rpm -q --qf "%{VERSION}" lbnl-nhc 2>/dev/null)"
+		[ -f /usr/sbin/nhc ] && echo "nhc body sha256 $(tail -n +2 /usr/sbin/nhc | sha256sum | cut -d " " -f 1)"
+		echo "nhc.conf check lines $(grep -c -v -E "^[[:space:]]*(#|\$)" /etc/nhc/nhc.conf 2>/dev/null)"
+		: >/tmp/nhc-empty.conf
+		timeout 60 nhc -c /tmp/nhc-empty.conf
+		echo "nhc empty exit $?"
+		timeout 60 nhc
+		echo "nhc default exit $?"
+		echo "* || check_file_test -r /nonexistent/nhc-test" >/tmp/nhc-fail.conf
+		timeout 60 nhc -c /tmp/nhc-fail.conf -l -
+		echo "nhc failing exit $?"
+		echo "* || check_file_test -r /nonexistent/nhc-sysconfig-test" >/tmp/nhc-sysconfig-fail.conf
+		for conf in empty sysconfig-fail; do
+			printf "%s\n" "CONFFILE=/tmp/nhc-$conf.conf" NHC_RM=slurm LOGFILE=- HOSTNAME=nhc-sysconfig-host \
+				>/etc/sysconfig/nhc
+			timeout 60 nhc
+			echo "nhc sysconfig $conf exit $?"
+		done')"
+	grep -E '^(have|rpm|nhc) ' <<<"$nhc_out" | sed 's/^/nhc: /'
+	check "nhc/installed" "$nhc_out" "have /usr/sbin/nhc" "have /usr/libexec/nhc/node-mark-offline" \
+		"have /usr/libexec/nhc/node-mark-online" "have /etc/nhc/scripts/common.nhc" \
+		"have /etc/nhc/scripts/csc_nvidia_smi.nhc" "have /usr/bin/sinfo" "have /usr/bin/scontrol" \
+		"have /etc/sysconfig/" "have nhc licence"
+	check "nhc/version" "$nhc_out" "rpm lbnl-nhc $NHC_VERSION" "nhc body sha256 $NHC_BODY_SHA256"
+	check "nhc/empty" "$nhc_out" "nhc empty exit 0"
+	check "nhc/default" "$nhc_out" "nhc.conf check lines 0" "nhc default exit 0"
+	check "nhc/runs" "$nhc_out" "check_file_test:  -r /nonexistent/nhc-test returned" "nhc failing exit " \
+		-- "nhc failing exit 0"
+	check "nhc/sysconfig" "$nhc_out" "nhc sysconfig empty exit 0" \
+		"node-mark-offline nhc-sysconfig-host check_file_test:  -r /nonexistent/nhc-sysconfig-test returned" \
+		"nhc sysconfig sysconfig-fail exit " -- "nhc sysconfig sysconfig-fail exit 0"
 fi
 
 # Plugins in the replaced image that slurmd does not need, each with its reason.

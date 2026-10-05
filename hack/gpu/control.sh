@@ -28,7 +28,7 @@ while (($#)); do
 		ALSO_FAIL+=("$2")
 		shift 2
 		;;
-	--pyxis | --nccl)
+	--pyxis | --nccl | --nhc)
 		args+=("$1")
 		shift
 		;;

@@ -125,7 +125,7 @@ jobs:
       - name: Test slurmd_gpu
         run: |
           hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu:${SLURM_TAG}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --nccl \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --nccl --nhc \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu-${{ matrix.arch }}.txt"
@@ -133,7 +133,7 @@ jobs:
       - name: Test slurmd_gpu_pyxis
         run: |
           hack/gpu/test-image.sh --image "local/slinky/slurmd_gpu_pyxis:${SLURM_TAG}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis --nccl \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis --nccl --nhc \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/test-slurmd_gpu_pyxis-${{ matrix.arch }}.txt"
@@ -176,26 +176,28 @@ jobs:
           grep -qE '^executed=([0-9]+) planned=\1 passed=[0-9]+ failed=1$' <<<"$out"
 
       # Upstream's rockylinux9 slurmd has no gpu_nvml or gpu_rsmi, no mpi_pmix,
-      # no compress_lz4, no Slurm licence file and no NCCL; its slurmd-pyxis has
-      # no pyxis in it.
+      # no compress_lz4, no Slurm licence file, no NCCL and no NHC; its
+      # slurmd-pyxis has no pyxis in it.
       - name: Control, upstream slurmd:26.05-rockylinux9
         run: |
           hack/gpu/control.sh --image "${CONTROL_SLURMD}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --nccl \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --nccl --nhc \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
-            --also-fail nccl/present
+            --also-fail nccl/present --also-fail nhc/installed --also-fail nhc/version \
+            --also-fail nhc/empty --also-fail nhc/default --also-fail nhc/runs --also-fail nhc/sysconfig
 
       - name: Control, upstream slurmd-pyxis:26.05-rockylinux9
         run: |
           hack/gpu/control.sh --image "${CONTROL_SLURMD_PYXIS}" \
-            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis --nccl \
+            --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' --pyxis --nccl --nhc \
             --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
             --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_SLURMD}" --also-fail plugins/parity --also-fail licence/slurm \
             --also-fail pyxis/plugin --also-fail pyxis/plugstack --also-fail pyxis/enroot \
-            --also-fail nccl/present
+            --also-fail nccl/present --also-fail nhc/installed --also-fail nhc/version \
+            --also-fail nhc/empty --also-fail nhc/default --also-fail nhc/runs --also-fail nhc/sysconfig
 
       # Upstream's login-pyxis has no pyxis, no mpi_pmix, no compress_lz4, no
       # Slurm licence file and no NCCL or nccl module, at the same Slurm release:
@@ -268,7 +270,7 @@ jobs:
             pyxis=()
             [[ $image == slurmd_gpu_pyxis ]] && pyxis=(--pyxis)
             hack/gpu/test-image.sh --image "${REGISTRY}/${image}@$(cat "${RUNNER_TEMP}/digests/${image}-${{ matrix.arch }}")" \
-              --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' "${pyxis[@]}" --nccl \
+              --platform '${{ matrix.platform }}' --expect '${{ matrix.expect }}' "${pyxis[@]}" --nccl --nhc \
               --nvml-stub "${RUNNER_TEMP}/nvml-stub/libnvidia-ml.so.1" \
               --same-slurm-as "slurmd=${STOCK_SLURMD}" --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
               --plugins-of "${STOCK_SLURMD}" | tee "${RUNNER_TEMP}/digests/test-${image}-${{ matrix.arch }}-pushed.txt"

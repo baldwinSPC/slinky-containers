@@ -21,6 +21,9 @@ finds `mpi_pmix`. All three carry the NCCL runtime library, and in
 scripts of SemiAnalysisAI/ClusterMAX, so the ClusterMAX Slurm audit runs as a
 Slurm step through pyxis. See [ClusterMAX](#clustermax) below.
 
+`slurmd_gpu` and `slurmd_gpu_pyxis` carry LBNL Node Health Check (NHC) for
+Slurm's `HealthCheckProgram`.
+
 Every publish run creates a GitHub release that lists the image digests,
 attaches an SBOM of every package in each image, and attaches the Slurm source
 archive the images were built from.
@@ -52,15 +55,16 @@ set in `schedmd/slurm/26.05/rockylinux9/Dockerfile`.
 
 Each licence was read at the version pinned here.
 
-| Component                       | Version                                                   | Licence                                                                                                                                            | In                       |
-| ------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| ROCm SMI (`rocm-smi-lib`)       | 7.8.0.70204, ROCm 7.2.4                                   | MIT. The package's `LICENSE.md` and `LICENSE.md` at `ROCm/rocm_smi_lib` tag `rocm-7.2.4` are identical; the RPM header's licence tag says NCSA     | both images, linux/amd64 |
-| `rocm-core`                     | 7.2.4.70204                                               | MIT (`LICENSE.md` in the package)                                                                                                                  | both images, linux/amd64 |
-| enroot, enroot+caps             | 4.2.1                                                     | Apache-2.0 (`LICENSE` at `NVIDIA/enroot` tag `v4.2.1`). The same file notes that enroot bundles makeself (GPL-2.0), installed as `enroot-makeself` | both pyxis images        |
-| pyxis                           | 0.24.0                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/pyxis` tag `v0.24.0`)                                                                                             | both pyxis images        |
-| nvidia-container-toolkit, -base | 1.20.1                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/nvidia-container-toolkit` tag `v1.20.1`)                                                                          | both pyxis images        |
-| libnvidia-container1, -tools    | 1.20.1, built from `NVIDIA/libnvidia-container` `v1.20.0` | Apache-2.0 (`LICENSE`). Its `NOTICE` adds the LGPL-3.0-or-later terms of elfutils `libelf`, which this build links                                 | both pyxis images        |
-| NCCL (`libnccl`)                | 2.32.3-1+cuda12.9                                         | Apache-2.0, with parts under BSD-3-Clause. See below                                                                                               | all three images         |
+| Component                           | Version                                                   | Licence                                                                                                                                             | In                       |
+| ----------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| ROCm SMI (`rocm-smi-lib`)           | 7.8.0.70204, ROCm 7.2.4                                   | MIT. The package's `LICENSE.md` and `LICENSE.md` at `ROCm/rocm_smi_lib` tag `rocm-7.2.4` are identical; the RPM header's licence tag says NCSA      | both images, linux/amd64 |
+| `rocm-core`                         | 7.2.4.70204                                               | MIT (`LICENSE.md` in the package)                                                                                                                   | both images, linux/amd64 |
+| enroot, enroot+caps                 | 4.2.1                                                     | Apache-2.0 (`LICENSE` at `NVIDIA/enroot` tag `v4.2.1`). The same file notes that enroot bundles makeself (GPL-2.0), installed as `enroot-makeself`  | both pyxis images        |
+| pyxis                               | 0.24.0                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/pyxis` tag `v0.24.0`)                                                                                              | both pyxis images        |
+| nvidia-container-toolkit, -base     | 1.20.1                                                    | Apache-2.0 (`LICENSE` at `NVIDIA/nvidia-container-toolkit` tag `v1.20.1`)                                                                           | both pyxis images        |
+| libnvidia-container1, -tools        | 1.20.1, built from `NVIDIA/libnvidia-container` `v1.20.0` | Apache-2.0 (`LICENSE`). Its `NOTICE` adds the LGPL-3.0-or-later terms of elfutils `libelf`, which this build links                                  | both pyxis images        |
+| NCCL (`libnccl`)                    | 2.32.3-1+cuda12.9                                         | Apache-2.0, with parts under BSD-3-Clause. See below                                                                                                | all three images         |
+| LBNL Node Health Check (`lbnl-nhc`) | 1.4.3, commit `d534d41d`                                  | BSD-3-Clause under the Regents of the University of California (LBNL) and Michael Jennings, plus LBNL's "Enhancements" grant-back clause. See below | both slurmd images       |
 
 **NCCL.** The `libnccl` RPM comes from NVIDIA's CUDA repository for RHEL 9, the
 same repository as the NVML headers, and each architecture's RPM is checked
@@ -71,11 +75,55 @@ installs `libnccl.so.2` and the device-code files `libnccl_device.bc` and
 `NVIDIA/nccl` tag `v2.32.3-1` (commit `12df1a11`): Apache-2.0, with parts
 retaining a BSD-3-Clause licence. The RPM header's licence tag says
 `Proprietary`. The library statically links the CUDA runtime: NCCL's
-`src/Makefile` links `cudart_static` by default, and `libnccl.so.2.32.3` needs no
-`libcudart` and carries the runtime's own strings. The CUDA Toolkit End User
-License Agreement lists `libcudart_static.a` as distributable in its
-Attachment A. No headers, CUDA compiler or other CUDA Toolkit component is in
-the images.
+`src/Makefile` links `cudart_static` by default, and `libnccl.so.2.32.3` needs
+no `libcudart` and carries the runtime's own strings. The CUDA Toolkit End User
+License Agreement lists `libcudart_static.a` as distributable in its Attachment
+A. No headers, CUDA compiler or other CUDA Toolkit component is in the images.
+
+**NHC.** `lbnl-nhc` 1.4.3 is built from the release archive
+<https://github.com/mej/nhc/releases/download/1.4.3/lbnl-nhc-1.4.3.tar.gz>,
+sha256 `d2d2108284eb7f833c13b70be1b33ba0115f598491e34ccb701df2a9eb0807b1`, the
+value the release's `SHA256SUMS` lists. The release is tag `1.4.3`, commit
+`d534d41db4237b018f18a3063c4ceb86b91fbe42`, and every file in the archive is
+identical to that commit's; the archive adds the generated `configure` and
+`Makefile.in`. The build refuses any other checksum. NHC's own `lbnl-nhc.spec`
+builds it into an RPM with its autotools build and runs its unit tests, so
+`rpm -q lbnl-nhc` reports `1.4.3-1.el9` and the SBOM lists it. It installs
+`/usr/sbin/nhc`, `nhc-genconf` and `nhc-wrapper`, the helpers
+`node-mark-offline` and `node-mark-online` in `/usr/libexec/nhc/`, the check
+libraries in `/etc/nhc/scripts/`, and `/etc/logrotate.d/nhc`. The archive and
+`make install` leave out `scripts/csc_nvidia_smi.nhc` (the
+`check_nvsmi_healthmon` check, by Johan Guldmyr of CSC), so the build fetches it
+from the same commit, checks it against sha256
+`3834facd81f03c95c797ce4af6aae665ea9fc8b2795b975c36ba369f219971f1`, and installs
+it beside the others. It carries no licence of its own and is distributed under
+the repository's `LICENSE`. The only change from the archive is the first line
+of the three `/usr/sbin` scripts and the two helpers, which EL9's rpmbuild
+rewrites from `#!/bin/bash` to `#!/usr/bin/bash`. `/etc/nhc/nhc.conf` is
+replaced by a file of two comment lines, so `nhc` run without `-c` runs no
+checks and exits 0; the archive's sample configuration runs checks and is not
+installed.
+
+`LICENSE` at that commit, carried in the images at
+`/usr/share/licenses/lbnl-nhc/LICENSE`, opens:
+
+> Copyright (c) 2010-2021, Michael Jennings <mej@eterm.org>
+>
+> LBNL Node Health Check (NHC), Copyright (c) 2015, The Regents of the
+> University of California, through Lawrence Berkeley National Laboratory
+> (subject to receipt of any required approvals from the U.S. Dept. of Energy).
+> All rights reserved.
+
+Its three conditions and disclaimer are BSD-3-Clause's, with the University of
+California, Lawrence Berkeley National Laboratory and the U.S. Dept. of Energy
+in the non-endorsement clause. It ends with LBNL's grant-back clause: there is
+no obligation to provide bug fixes, patches or upgrades ("Enhancements") to
+anyone, but Enhancements made available publicly, or directly to LBNL, without a
+separate written licence agreement are licensed to LBNL non-exclusively,
+royalty-free and perpetually, to install, use, modify, prepare derivative works,
+incorporate into other software, distribute and sublicense, in binary and source
+form. The image changes no NHC source, so it makes no Enhancement. The spec's
+licence tag is `BSD-3-Clause-LBNL`.
 
 **Lmod.** The `nccl/2.32.3` modulefile in `login_gpu_pyxis` is at
 `/etc/modulefiles/nccl/2.32.3.lua` and sets `NCCL_HOME=/usr`. `module` is Lmod
@@ -169,3 +217,4 @@ is in the source repositories of Rocky Linux
 - NCCL is in all three images, and `login_gpu_pyxis` has the `nccl` modulefile.
   Upstream's images have neither.
 - `clustermax_audit` has no counterpart upstream.
+- NHC is in `slurmd_gpu` and `slurmd_gpu_pyxis`. Upstream's images have none.

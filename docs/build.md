@@ -206,6 +206,9 @@ a requested plugin is not in the Slurm package it produces.
   the same CUDA repository is checked against `NCCL_SHA256_AMD64` or
   `NCCL_SHA256_ARM64` and installed in `slurmd-gpu` and `login-gpu`. `login-gpu`
   also gets an `nccl/<version>` Lmod modulefile in `/etc/modulefiles`.
+- **NHC:** LBNL Node Health Check (`NHC_VERSION`) is built into an RPM by its
+  own spec from the release archive, checked against `NHC_SHA256`, and installed
+  in `slurmd-gpu` with an `/etc/nhc/nhc.conf` that runs no checks.
 
 ## Extending the images with additional software
 

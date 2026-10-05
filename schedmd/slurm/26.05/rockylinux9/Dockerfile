@@ -29,6 +29,16 @@ ARG ROCM_SMI_LIB=rocm-smi-lib-7.8.0.70204-93.el8
 ARG NCCL_VERSION=2.32.3-1+cuda12.9
 ARG NCCL_SHA256_AMD64=cca47a5b99e93b726517f1fb63f0a949bad090d5c9a2e78ad9a53fe575b4c6b8
 ARG NCCL_SHA256_ARM64=e1eae906a66de1c36010d8b3d4f8745698a0e5fa3fc73323d9425fcddcb93980
+# LBNL Node Health Check, for Slurm's HealthCheckProgram, installed in
+# slurmd-gpu. The release archive of tag 1.4.3 (commit
+# d534d41db4237b018f18a3063c4ceb86b91fbe42) must match this sha256; it is the
+# one SHA256SUMS in that GitHub release lists.
+ARG NHC_VERSION=1.4.3
+ARG NHC_SHA256=d2d2108284eb7f833c13b70be1b33ba0115f598491e34ccb701df2a9eb0807b1
+# scripts/csc_nvidia_smi.nhc at the same commit, which the release archive and
+# make install leave out. It must match this sha256.
+ARG NHC_COMMIT=d534d41db4237b018f18a3063c4ceb86b91fbe42
+ARG NHC_CSC_NVIDIA_SMI_SHA256=3834facd81f03c95c797ce4af6aae665ea9fc8b2795b975c36ba369f219971f1
 
 ################################################################################
 FROM ${ALPINE_IMAGE} AS slurm-src
@@ -50,6 +60,36 @@ RUN \
   mkdir -p ${SLURM_DIR} && \
   tar --strip-components=1 -zxvf ${SLURM_TAR} -C ${SLURM_DIR} && \
   rm ${SLURM_TAR}
+
+################################################################################
+# NHC's own spec builds it with its autotools build and runs its unit tests.
+FROM ${PARENT_IMAGE} AS nhc-build
+
+SHELL ["bash", "-c"]
+
+ARG NHC_VERSION
+ARG NHC_SHA256
+ARG NHC_COMMIT
+ARG NHC_CSC_NVIDIA_SMI_SHA256
+
+WORKDIR /root/
+
+ADD https://github.com/mej/nhc/releases/download/${NHC_VERSION}/lbnl-nhc-${NHC_VERSION}.tar.gz /root/
+ADD https://raw.githubusercontent.com/mej/nhc/${NHC_COMMIT}/scripts/csc_nvidia_smi.nhc /root/nhc-scripts/
+
+RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked <<EOR
+# Build the NHC RPM
+set -xeuo pipefail
+echo "${NHC_SHA256}  lbnl-nhc-${NHC_VERSION}.tar.gz" | sha256sum --check --strict
+echo "${NHC_CSC_NVIDIA_SMI_SHA256}  nhc-scripts/csc_nvidia_smi.nhc" | sha256sum --check --strict
+chmod 0644 nhc-scripts/csc_nvidia_smi.nhc
+dnf -q -y install --setopt='install_weak_deps=False' make rpm-build
+rpmbuild --define '_topdir /root/rpmbuild' --define 'rel 1' -tb "lbnl-nhc-${NHC_VERSION}.tar.gz"
+mkdir -p /root/nhc-rpms/ /root/nhc-licence/
+cp "/root/rpmbuild/RPMS/noarch/lbnl-nhc-${NHC_VERSION}-1.el9.noarch.rpm" /root/nhc-rpms/
+tar -xzf "lbnl-nhc-${NHC_VERSION}.tar.gz" -C /root/nhc-licence/ --no-same-owner --strip-components=1 \
+  "lbnl-nhc-${NHC_VERSION}/LICENSE"
+EOR
 
 ################################################################################
 FROM ${PARENT_IMAGE} AS build
@@ -347,6 +387,7 @@ ARG GPU_AUTODETECT_AMD64
 ARG GPU_AUTODETECT_ARM64
 ARG ROCM_VERSION
 ARG NCCL_VERSION
+ARG NHC_VERSION
 ARG SLURM_DIR
 
 USER root
@@ -359,12 +400,22 @@ COPY --from=slurm-src \
   /workspace/${SLURM_DIR}/LICENSE.OpenSSL \
   /usr/share/licenses/slurm/
 
+# dnf here skips documentation, which is where the NHC RPM puts its licence.
+COPY --from=nhc-build /root/nhc-licence/LICENSE /usr/share/licenses/lbnl-nhc/
+
 # Slurm dlopens libnvidia-ml.so.1 or librocm_smi64.so itself when gres.conf sets
 # AutoDetect=nvml or AutoDetect=rsmi; neither plugin links the library.
+# NHC is bash; its checks and helpers call coreutils (coreutils-single here),
+# gawk, sed, procps-ng and util-linux, and the helpers call sinfo and scontrol.
+# csc_nvidia_smi.nhc calls nvidia-smi, which the NVIDIA container toolkit
+# injects. The installed nhc.conf runs no checks: the deployment names its own
+# configuration with -c or with CONFFILE in /etc/sysconfig/nhc, which nhc reads.
 RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked \
   --mount=type=bind,from=build,source=/root/gpu-rpms/,target=/tmp/gpu-rpms/ \
-  --mount=type=bind,from=build,source=/root/nccl-rpms/,target=/tmp/nccl-rpms/ <<EOR
-# Install GPU Autodetect Runtime
+  --mount=type=bind,from=build,source=/root/nccl-rpms/,target=/tmp/nccl-rpms/ \
+  --mount=type=bind,from=nhc-build,source=/root/nhc-rpms/,target=/tmp/nhc-rpms/ \
+  --mount=type=bind,from=nhc-build,source=/root/nhc-scripts/,target=/tmp/nhc-scripts/ <<EOR
+# Install GPU Autodetect Runtime and NHC
 set -xeuo pipefail
 case "${TARGETARCH}" in
 amd64) GPU_AUTODETECT="${GPU_AUTODETECT_AMD64}" ;;
@@ -394,6 +445,15 @@ for gpu in ${GPU_AUTODETECT}; do
     ;;
   esac
 done
+dnf -q -y install --setopt='install_weak_deps=False' \
+  bash gawk procps-ng sed util-linux \
+  "/tmp/nhc-rpms/lbnl-nhc-${NHC_VERSION}-1.el9.noarch.rpm"
+install -m 0644 /tmp/nhc-scripts/csc_nvidia_smi.nhc /etc/nhc/scripts/
+cat >/etc/nhc/nhc.conf <<CONF
+# LBNL Node Health Check ${NHC_VERSION}. This file configures no checks, so
+# nhc run with it exits 0. Name the deployment's configuration with -c or
+# with CONFFILE in /etc/sysconfig/nhc.
+CONF
 EOR
 
 ################################################################################
