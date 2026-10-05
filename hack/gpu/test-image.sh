@@ -8,6 +8,8 @@
 # also checks how many GPUs a plugin enumerates and registers, on a host whose
 # GPUs --device or --gpus passes to the slurmd -C and slurmd -G containers.
 # With --nccl it also checks that the NCCL runtime library is in the image.
+# With --nhc it also checks that LBNL Node Health Check 1.4.3 is installed, that
+# its installed configuration runs no checks, and that a failing check fails.
 #
 # Prints PASS <id> or FAIL <id> for every assertion and then the counts. Exits 0
 # only when every planned assertion ran and passed.
@@ -26,6 +28,8 @@ usage: $(basename "$0") --image REF --platform PLATFORM --expect "nvml rsmi" [op
   --same-slurm-as BIN=REF  BIN -V in REF must print what slurmd -V prints in the image (repeatable)
   --pyxis                  the image must carry pyxis and enroot
   --nccl                   the image must carry libnccl.so* under /usr, /opt, /lib or /lib64
+  --nhc                    the image must carry LBNL NHC 1.4.3 at /usr/sbin/nhc with its
+                           helpers and licence, and an /etc/nhc/nhc.conf that runs no checks
   --plugins-of REF         every Slurm plugin slurmd can load from REF, the image this one
                            replaces, must be in the image too, less the exceptions below
   --device PATH            a host device to pass to the slurmd -C and slurmd -G containers,
@@ -46,6 +50,7 @@ NVML_STUB=""
 SAME_AS=()
 PYXIS=false
 NCCL=false
+NHC=false
 PLUGINS_OF=""
 DEVICES=()
 GPUS=""
@@ -78,6 +83,10 @@ while (($#)); do
 		;;
 	--nccl)
 		NCCL=true
+		shift
+		;;
+	--nhc)
+		NHC=true
 		shift
 		;;
 	--plugins-of)
@@ -327,6 +336,9 @@ fi
 if $NCCL; then
 	PLANNED=$((PLANNED + 1))
 fi
+if $NHC; then
+	PLANNED=$((PLANNED + 5))
+fi
 if [[ -n $PLUGINS_OF ]]; then
 	PLANNED=$((PLANNED + 1))
 fi
@@ -481,6 +493,41 @@ if $NCCL; then
 	else
 		pass "nccl/present"
 	fi
+fi
+
+# NHC prints no version, so the version is the RPM's and /usr/sbin/nhc must be
+# the file the 1.4.3 release ships below its first line, which rpmbuild on EL9
+# rewrites from #!/bin/bash to #!/usr/bin/bash. Each run reports its exit status last, so a
+# run that did not happen is not read as one that passed. nhc/runs is the
+# control on the other two: an nhc that exits 0 whatever it is given fails it.
+NHC_VERSION=1.4.3
+NHC_BODY_SHA256=b05afaf9fb2da27714efec8436ae46a86bd08ec0a8e6d50d23df93f0c221a561
+if $NHC; then
+	nhc_out="$(run_in "$IMAGE_REF" bash -c '
+		for f in /usr/sbin/nhc /usr/libexec/nhc/node-mark-offline /usr/libexec/nhc/node-mark-online; do
+			[ -x "$f" ] && echo "have $f"
+		done
+		[ -f /etc/nhc/scripts/common.nhc ] && echo "have /etc/nhc/scripts/common.nhc"
+		grep -q "Lawrence Berkeley National Laboratory" /usr/share/licenses/lbnl-nhc/LICENSE &&
+			grep -q "(\"Enhancements\")" /usr/share/licenses/lbnl-nhc/LICENSE && echo "have nhc licence"
+		echo "rpm lbnl-nhc $(rpm -q --qf "%{VERSION}" lbnl-nhc 2>/dev/null)"
+		[ -f /usr/sbin/nhc ] && echo "nhc body sha256 $(tail -n +2 /usr/sbin/nhc | sha256sum | cut -d " " -f 1)"
+		echo "nhc.conf check lines $(grep -c -v -E "^[[:space:]]*(#|\$)" /etc/nhc/nhc.conf 2>/dev/null)"
+		: >/tmp/nhc-empty.conf
+		timeout 60 nhc -c /tmp/nhc-empty.conf
+		echo "nhc empty exit $?"
+		timeout 60 nhc
+		echo "nhc default exit $?"
+		echo "* || check_file_test -r /nonexistent/nhc-test" >/tmp/nhc-fail.conf
+		timeout 60 nhc -c /tmp/nhc-fail.conf -l -
+		echo "nhc failing exit $?"')"
+	grep -E '^(have|rpm|nhc) ' <<<"$nhc_out" | sed 's/^/nhc: /'
+	check "nhc/installed" "$nhc_out" "have /usr/sbin/nhc" "have /usr/libexec/nhc/node-mark-offline" \
+		"have /usr/libexec/nhc/node-mark-online" "have /etc/nhc/scripts/common.nhc" "have nhc licence"
+	check "nhc/version" "$nhc_out" "rpm lbnl-nhc $NHC_VERSION" "nhc body sha256 $NHC_BODY_SHA256"
+	check "nhc/empty" "$nhc_out" "nhc empty exit 0"
+	check "nhc/default" "$nhc_out" "nhc.conf check lines 0" "nhc default exit 0"
+	check "nhc/runs" "$nhc_out" "Health check failed:  check_file_test" "nhc failing exit " -- "nhc failing exit 0"
 fi
 
 # Plugins in the replaced image that slurmd does not need, each with its reason.

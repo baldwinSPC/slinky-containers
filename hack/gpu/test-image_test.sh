@@ -10,7 +10,9 @@
 # find that does not run. The GPU runs model the runtime: --gpus injects
 # libnvidia-ml.so.1 and must reach only slurmd -C and slurmd -G, and --device
 # must reach slurmd -G for the GPU to be seen. nccl/present runs with libnccl in
-# the image, with none, and with a find that does not run.
+# the image, with none, and with a find that does not run. The nhc checks run
+# with NHC 1.4.3 installed, with none, with an nhc.conf that configures a check,
+# with another nhc, and with an nhc that exits 0 whatever it is given.
 
 set -euo pipefail
 
@@ -28,7 +30,9 @@ cat >"$work/bin/docker" <<'EOF'
 # it, and otherwise what the plugin logs with no GPU. PODMAN_BANNER prints
 # podman-docker's banner on every call, DRIVER_FILES are driver files in the
 # image, and FIND_FAILS makes find fail to start. NO_NCCL leaves libnccl out of
-# the image, and NCCL_FIND_FAILS makes the libnccl find fail to start.
+# the image, and NCCL_FIND_FAILS makes the libnccl find fail to start. NO_NHC
+# leaves NHC out of the image, NHC_CONF_CHECKS gives its nhc.conf a check line,
+# NHC_OTHER installs another nhc, and NHC_VACUOUS makes nhc exit 0 on any config.
 if [[ -n ${PODMAN_BANNER:-} ]]; then
 	echo "Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg." >&2
 fi
@@ -72,6 +76,43 @@ case "$*" in
 	else
 		echo "slurmd: GPU RSMI plugin loaded"
 		echo "slurmd: We were configured to autodetect nvml functionality, but we weren't able to find that lib when Slurm was configured."
+	fi
+	;;
+*"/usr/sbin/nhc"*)
+	if [[ -n ${NO_NHC:-} ]]; then
+		echo "rpm lbnl-nhc "
+		echo "nhc.conf check lines "
+		for run in empty default failing; do
+			echo "bash: line 1: nhc: command not found"
+			echo "nhc $run exit 127"
+		done
+		exit 0
+	fi
+	printf 'have %s\n' /usr/sbin/nhc /usr/libexec/nhc/node-mark-offline /usr/libexec/nhc/node-mark-online \
+		/etc/nhc/scripts/common.nhc
+	echo "have nhc licence"
+	if [[ -n ${NHC_OTHER:-} ]]; then
+		echo "rpm lbnl-nhc 1.4.2"
+		echo "nhc body sha256 0000000000000000000000000000000000000000000000000000000000000000"
+	else
+		echo "rpm lbnl-nhc 1.4.3"
+		echo "nhc body sha256 b05afaf9fb2da27714efec8436ae46a86bd08ec0a8e6d50d23df93f0c221a561"
+	fi
+	if [[ -n ${NHC_CONF_CHECKS:-} ]]; then
+		echo "nhc.conf check lines 1"
+		echo "nhc empty exit 0"
+		echo "ERROR:  nhc:  Health check failed:  check_hw_mem_free:  1mb"
+		echo "nhc default exit 1"
+	else
+		echo "nhc.conf check lines 0"
+		echo "nhc empty exit 0"
+		echo "nhc default exit 0"
+	fi
+	if [[ -n ${NHC_VACUOUS:-} ]]; then
+		echo "nhc failing exit 0"
+	else
+		echo "ERROR:  nhc:  Health check failed:  check_file_test:  -r /nonexistent/nhc-test returned 1."
+		echo "nhc failing exit 1"
 	fi
 	;;
 *"--entrypoint slurmd test/gpu:1 -V"*) echo "slurm 26.05.4" ;;
@@ -226,5 +267,28 @@ check "nccl-find-did-not-run" "$(verdict nccl/present "$(harness_run ncclnofind 
 check "nccl-not-asked" "$(verdict nccl/present "$(harness_run ncclnotasked "$AGREE" NO_NCCL=1 -- --expect rsmi)")" \
 	"executed=7 planned=7 passed=7 failed=0|"
 
+# nhc_verdicts OUTPUT: every nhc/ assertion's line and the counts, joined by |.
+nhc_verdicts() {
+	grep -E "^(PASS|FAIL) nhc/|^executed=" <<<"$1" | tr '\n' '|'
+}
+
+check "nhc-present" "$(nhc_verdicts "$(harness_run nhc "$AGREE" -- --expect rsmi --nhc)")" \
+	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|executed=12 planned=12 passed=12 failed=0|"
+
+check "nhc-absent" "$(nhc_verdicts "$(harness_run nonhc "$AGREE" NO_NHC=1 -- --expect rsmi --nhc)")" \
+	"FAIL nhc/installed: missing: have /usr/sbin/nhc|FAIL nhc/version: missing: rpm lbnl-nhc 1.4.3|FAIL nhc/empty: missing: nhc empty exit 0|FAIL nhc/default: missing: nhc.conf check lines 0|FAIL nhc/runs: missing: Health check failed:  check_file_test|executed=12 planned=12 passed=7 failed=5|"
+
+check "nhc-conf-checks" "$(nhc_verdicts "$(harness_run nhcconf "$AGREE" NHC_CONF_CHECKS=1 -- --expect rsmi --nhc)")" \
+	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|FAIL nhc/default: missing: nhc.conf check lines 0|PASS nhc/runs|executed=12 planned=12 passed=11 failed=1|"
+
+check "nhc-other-version" "$(nhc_verdicts "$(harness_run nhcother "$AGREE" NHC_OTHER=1 -- --expect rsmi --nhc)")" \
+	"PASS nhc/installed|FAIL nhc/version: missing: rpm lbnl-nhc 1.4.3|PASS nhc/empty|PASS nhc/default|PASS nhc/runs|executed=12 planned=12 passed=11 failed=1|"
+
+check "nhc-vacuous" "$(nhc_verdicts "$(harness_run nhcvacuous "$AGREE" NHC_VACUOUS=1 -- --expect rsmi --nhc)")" \
+	"PASS nhc/installed|PASS nhc/version|PASS nhc/empty|PASS nhc/default|FAIL nhc/runs: missing: Health check failed:  check_file_test|executed=12 planned=12 passed=11 failed=1|"
+
+check "nhc-not-asked" "$(nhc_verdicts "$(harness_run nhcnotasked "$AGREE" NO_NHC=1 -- --expect rsmi)")" \
+	"executed=7 planned=7 passed=7 failed=0|"
+
 echo "executed=$EXECUTED failed=$FAILED"
-((EXECUTED == 17 && FAILED == 0))
+((EXECUTED == 23 && FAILED == 0))
