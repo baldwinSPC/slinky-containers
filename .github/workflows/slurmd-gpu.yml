@@ -1,8 +1,9 @@
 ---
-# Builds and checks the slurmd_gpu, slurmd_gpu_pyxis and login_gpu_pyxis images
-# on native amd64 and arm64 runners. Publishing is a manual run on main with
-# publish=true: the images are pushed by digest, the pushed digests are checked
-# again, and only then does the multi-platform index get its tags.
+# Builds and checks the slurmd_gpu, slurmd_gpu_pyxis, login_gpu_pyxis and
+# clustermax_audit images on native amd64 and arm64 runners. Publishing is a
+# manual run on main with publish=true: the images are pushed by digest, the
+# pushed digests are checked again, and only then does the multi-platform index
+# get its tags.
 name: slurmd-gpu
 
 on:
@@ -96,6 +97,12 @@ jobs:
       - name: Test the login check verdicts
         run: hack/gpu/test-login_test.sh
 
+      - name: Test the clustermax-audit wrapper
+        run: hack/gpu/clustermax-audit_test.sh
+
+      - name: Test the clustermax_audit check verdicts
+        run: hack/gpu/test-clustermax_test.sh
+
       - name: Build the NVML test stub
         run: |
           docker buildx build --platform '${{ matrix.platform }}' \
@@ -113,7 +120,7 @@ jobs:
           docker buildx bake \
             --file docker-bake.hcl --file 26.05/rockylinux9/slurm.hcl --file 26.05/rockylinux9/gpu.hcl \
             --set '*.platform=${{ matrix.platform }}' --load --progress=plain \
-            slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis
+            slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis clustermax_audit
 
       - name: Test slurmd_gpu
         run: |
@@ -137,6 +144,21 @@ jobs:
             --platform '${{ matrix.platform }}' \
             --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_LOGIN}" | tee "${RUNNER_TEMP}/test-login_gpu_pyxis-${{ matrix.arch }}.txt"
+
+      # clustermax_audit is login_gpu_pyxis with more in it: the login checks
+      # hold for it too, and test-clustermax.sh checks what it adds.
+      - name: Test clustermax_audit
+        run: |
+          gpu_hcl=schedmd/slurm/26.05/rockylinux9/gpu.hcl
+          commit="$(sed -n -E 's/^[[:space:]]*CLUSTERMAX_COMMIT = "(.*)"/\1/p' "$gpu_hcl")"
+          licence="$(sed -n -E 's/^[[:space:]]*CLUSTERMAX_LICENSE_SHA256 = "(.*)"/\1/p' "$gpu_hcl")"
+          hack/gpu/test-login.sh --image "local/slinky/clustermax_audit:${SLURM_TAG}" \
+            --platform '${{ matrix.platform }}' \
+            --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
+            --plugins-of "${STOCK_LOGIN}" | tee "${RUNNER_TEMP}/test-clustermax_audit-login-${{ matrix.arch }}.txt"
+          hack/gpu/test-clustermax.sh --image "local/slinky/clustermax_audit:${SLURM_TAG}" \
+            --platform '${{ matrix.platform }}' --commit "$commit" --licence-sha256 "$licence" \
+            | tee "${RUNNER_TEMP}/test-clustermax_audit-${{ matrix.arch }}.txt"
 
       # The runner has no AMD GPU: rsmi detects and registers 0, and a count of
       # 1 fails on count/rsmi alone.
@@ -193,7 +215,7 @@ jobs:
       - name: SBOM
         run: |
           mkdir -p "${RUNNER_TEMP}/sbom"
-          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis; do
+          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis clustermax_audit; do
             hack/gpu/sbom.sh --image "local/slinky/${image}:${SLURM_TAG}" --platform '${{ matrix.platform }}' \
               >"${RUNNER_TEMP}/sbom/${image}-${{ matrix.arch }}.tsv"
             hack/gpu/sbom.sh --image "local/slinky/${image}:${SLURM_TAG}" --platform '${{ matrix.platform }}' \
@@ -226,12 +248,13 @@ jobs:
             --set "slurmd_gpu.tags=${REGISTRY}/slurmd_gpu" \
             --set "slurmd_gpu_pyxis.tags=${REGISTRY}/slurmd_gpu_pyxis" \
             --set "login_gpu_pyxis.tags=${REGISTRY}/login_gpu_pyxis" \
+            --set "clustermax_audit.tags=${REGISTRY}/clustermax_audit" \
             --set '*.output=type=image,push-by-digest=true,name-canonical=true,push=true' \
             --provenance=mode=max --sbom=true \
             --metadata-file "${RUNNER_TEMP}/metadata.json" --progress=plain \
-            slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis
+            slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis clustermax_audit
           mkdir -p "${RUNNER_TEMP}/digests"
-          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis; do
+          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis clustermax_audit; do
             digest="$(jq -r --arg t "$image" '.[$t]["containerimage.digest"]' "${RUNNER_TEMP}/metadata.json")"
             echo "${image} ${{ matrix.platform }} ${digest}"
             echo "${digest}" >"${RUNNER_TEMP}/digests/${image}-${{ matrix.arch }}"
@@ -254,6 +277,12 @@ jobs:
             --platform '${{ matrix.platform }}' \
             --same-slurm-as "slurmctld=${STOCK_SLURMCTLD}" \
             --plugins-of "${STOCK_LOGIN}" | tee "${RUNNER_TEMP}/digests/test-login_gpu_pyxis-${{ matrix.arch }}-pushed.txt"
+          gpu_hcl=schedmd/slurm/26.05/rockylinux9/gpu.hcl
+          hack/gpu/test-clustermax.sh --image "${REGISTRY}/clustermax_audit@$(cat "${RUNNER_TEMP}/digests/clustermax_audit-${{ matrix.arch }}")" \
+            --platform '${{ matrix.platform }}' \
+            --commit "$(sed -n -E 's/^[[:space:]]*CLUSTERMAX_COMMIT = "(.*)"/\1/p' "$gpu_hcl")" \
+            --licence-sha256 "$(sed -n -E 's/^[[:space:]]*CLUSTERMAX_LICENSE_SHA256 = "(.*)"/\1/p' "$gpu_hcl")" \
+            | tee "${RUNNER_TEMP}/digests/test-clustermax_audit-${{ matrix.arch }}-pushed.txt"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: env.PUBLISH == 'true'
@@ -298,7 +327,7 @@ jobs:
       - name: Tag the multi-platform indexes
         run: |
           : >"${RUNNER_TEMP}/indexes"
-          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis; do
+          for image in slurmd_gpu slurmd_gpu_pyxis login_gpu_pyxis clustermax_audit; do
             amd64="$(cat "${RUNNER_TEMP}/digests/${image}-amd64")"
             arm64="$(cat "${RUNNER_TEMP}/digests/${image}-arm64")"
             docker buildx imagetools create \
@@ -316,9 +345,10 @@ jobs:
       - name: Architecture guard
         run: |
           while read -r image index _ _; do
-            # The login runs no slurmd; srun is the binary it is there for.
+            # The login and the audit image run no slurmd; srun is the binary
+            # they are there for.
             binary=/usr/sbin/slurmd
-            [[ $image == login_gpu_pyxis ]] && binary=/usr/bin/srun
+            [[ $image == login_gpu_pyxis || $image == clustermax_audit ]] && binary=/usr/bin/srun
             hack/gpu/arch-guard.sh --binary "$binary" "${REGISTRY}/${image}@${index}" linux/amd64 linux/arm64
           done <"${RUNNER_TEMP}/indexes"
 

@@ -1,4 +1,4 @@
-// Pins for the slurmd_gpu and login_gpu_pyxis images published from
+// Pins for the slurmd_gpu, login_gpu_pyxis and clustermax_audit images published from
 // baldwinSPC/slinky-containers. Load after docker-bake.hcl and slurm.hcl:
 //   docker buildx bake --file docker-bake.hcl --file 26.05/rockylinux9/slurm.hcl \
 //     --file 26.05/rockylinux9/gpu.hcl gpu
@@ -62,4 +62,16 @@ target "login_gpu_pyxis" {
     checksums = "26.05/rockylinux9/pyxis-checksums"
   }
   labels = _fork_labels
+}
+
+target "clustermax_audit" {
+  args = {
+    # SemiAnalysisAI/ClusterMAX, branch master, 2026-09-30. Its LICENSE is
+    # Apache-2.0, "Copyright 2025 SemiAnalysis", the same file as at tag v0.2.1.
+    CLUSTERMAX_COMMIT = "1492ac5e4ac992ae436f062cc51a340d61672ca3"
+    CLUSTERMAX_LICENSE_SHA256 = "68aee1a6de2e8cf7b47c6e937709e049704efd2d4dd3671c4f037562d7f313dc"
+  }
+  labels = merge(_fork_labels, {
+    "org.opencontainers.image.licenses" = "GPL-2.0-or-later WITH openssl-exception AND Apache-2.0"
+  })
 }

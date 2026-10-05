@@ -5,8 +5,10 @@
 > [SlinkyProject/containers](https://github.com/SlinkyProject/containers). It
 > adds GPU-capable `slurmd` images, `slurmd_gpu` and `slurmd_gpu_pyxis`, built
 > with NVML (linux/amd64 and linux/arm64) and ROCm SMI (linux/amd64), so
-> `gres.conf` can use `AutoDetect=nvml` and `AutoDetect=rsmi`. They are
-> published to `ghcr.io/baldwinspc/slinky-containers` and are not SchedMD's. See
+> `gres.conf` can use `AutoDetect=nvml` and `AutoDetect=rsmi`, a pyxis login,
+> `login_gpu_pyxis`, and `clustermax_audit`, which runs the ClusterMAX Slurm
+> audit as a Slurm step. They are published to
+> `ghcr.io/baldwinspc/slinky-containers` and are not SchedMD's. See
 > [NOTICE-GPU.md](./NOTICE-GPU.md) for their licences and sources.
 >
 > ```sh

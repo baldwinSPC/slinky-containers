@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: Apache-2.0
+#
+# clustermax_audit: login_gpu_pyxis plus jq, python3 and the audit scripts of
+# SemiAnalysisAI/ClusterMAX at a pinned commit, run as a Slurm step through
+# pyxis:
+#   salloc ... srun --overlap --container-image=<this image> \
+#     --container-mounts=/run/slurm clustermax-audit
+
+# The full commit, and the sha256 of its LICENSE. The build refuses either one
+# empty or different.
+ARG CLUSTERMAX_COMMIT=""
+ARG CLUSTERMAX_LICENSE_SHA256=""
+
+################################################################################
+# Replaced by a named build context: login_gpu_pyxis.
+FROM scratch AS login_gpu_pyxis
+
+################################################################################
+FROM login_gpu_pyxis AS clustermax-audit
+
+SHELL ["bash", "-c"]
+
+ARG CLUSTERMAX_COMMIT
+ARG CLUSTERMAX_LICENSE_SHA256
+
+USER root
+WORKDIR /tmp/
+
+RUN <<EOR
+# Check the pins
+set -euo pipefail
+if [[ ! ${CLUSTERMAX_COMMIT} =~ ^[0-9a-f]{40}$ ]]; then
+  echo "CLUSTERMAX_COMMIT must be a full commit sha, got '${CLUSTERMAX_COMMIT}'" >&2
+  exit 1
+fi
+if [[ ! ${CLUSTERMAX_LICENSE_SHA256} =~ ^[0-9a-f]{64}$ ]]; then
+  echo "CLUSTERMAX_LICENSE_SHA256 must be a sha256, got '${CLUSTERMAX_LICENSE_SHA256}'" >&2
+  exit 1
+fi
+EOR
+
+RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked <<EOR
+# Install the audit's tools
+set -xeuo pipefail
+dnf -q -y install --setopt='install_weak_deps=False' jq python3
+jq --version
+python3 --version
+EOR
+
+ADD --keep-git-dir=false "https://github.com/SemiAnalysisAI/ClusterMAX.git#${CLUSTERMAX_COMMIT}" /opt/clustermax/
+COPY files/usr/local/bin/clustermax-audit /usr/local/bin/clustermax-audit
+
+RUN <<EOR
+# Check the pinned tree and install its licence
+set -xeuo pipefail
+test -x /opt/clustermax/cmax/scripts/1-audit/run.sh
+test -f /opt/clustermax/cmax/scripts/1-audit/cluster-audit-slurm.sh
+echo "${CLUSTERMAX_LICENSE_SHA256}  /opt/clustermax/LICENSE" | sha256sum --check --strict
+mkdir -p /usr/share/licenses/clustermax/
+cp /opt/clustermax/LICENSE /usr/share/licenses/clustermax/LICENSE
+# ClusterMAX carries no NOTICE file at this commit; one added later travels too.
+if [[ -f /opt/clustermax/NOTICE ]]; then
+  cp /opt/clustermax/NOTICE /usr/share/licenses/clustermax/NOTICE
+fi
+echo "${CLUSTERMAX_COMMIT}" >/usr/share/licenses/clustermax/COMMIT
+chmod 0755 /usr/local/bin/clustermax-audit
+EOR
+
+ENV CLUSTERMAX_COMMIT="${CLUSTERMAX_COMMIT}"
+
+ENTRYPOINT []
+CMD ["/usr/local/bin/clustermax-audit"]
