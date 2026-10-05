@@ -380,11 +380,39 @@ target "login_gpu_pyxis" {
   }
 }
 
+# login_gpu_pyxis plus jq, python3 and SemiAnalysisAI/ClusterMAX's audit
+# scripts, so the ClusterMAX Slurm audit runs as a Slurm step through pyxis with
+# the login's own Slurm client. gpu.hcl pins the ClusterMAX commit.
+target "clustermax_audit" {
+  inherits = ["_login"]
+  context = context
+  dockerfile = "Dockerfile.clustermax"
+  target = "clustermax-audit"
+  tags = [
+    format_tag(REGISTRY, "clustermax_audit", slurm_version(slurm_version), linux_flavor, SUFFIX),
+    format_tag(REGISTRY, "clustermax_audit", slurm_version, linux_flavor, SUFFIX),
+  ]
+  contexts = {
+    login_gpu_pyxis = "target:login_gpu_pyxis"
+  }
+  labels = {
+    # Ref: https://github.com/opencontainers/image-spec/blob/v1.0/annotations.md
+    "org.opencontainers.image.title" = "ClusterMAX Slurm audit"
+    "org.opencontainers.image.description" = "The Slurm login with pyxis, plus SemiAnalysisAI/ClusterMAX's audit scripts, run as a Slurm step"
+    "org.opencontainers.image.documentation" = "https://github.com/SemiAnalysisAI/ClusterMAX"
+    # Ref: https://docs.redhat.com/en/documentation/red_hat_software_certification/2025/html/red_hat_openshift_software_certification_policy_guide/assembly-requirements-for-container-images_openshift-sw-cert-policy-introduction#con-image-metadata-requirements_openshift-sw-cert-policy-container-images
+    "name" = "ClusterMAX Slurm audit"
+    "summary" = "The ClusterMAX Slurm audit, run as a Slurm step"
+    "description" = "The Slurm login with pyxis, plus SemiAnalysisAI/ClusterMAX's audit scripts, run as a Slurm step"
+  }
+}
+
 group "gpu-multiarch" {
   targets = [
     "slurmd_gpu_multiarch",
     "slurmd_gpu_pyxis_multiarch",
     "login_gpu_pyxis_multiarch",
+    "clustermax_audit_multiarch",
   ]
 }
 
@@ -398,6 +426,10 @@ target "slurmd_gpu_pyxis_multiarch" {
 
 target "login_gpu_pyxis_multiarch" {
   inherits = ["login_gpu_pyxis", "_multiarch"]
+}
+
+target "clustermax_audit_multiarch" {
+  inherits = ["clustermax_audit", "_multiarch"]
 }
 
 ################################################################################

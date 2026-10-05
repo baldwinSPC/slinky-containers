@@ -36,12 +36,14 @@ parent_image="$(hcl_value "$FLAVOR/gpu.hcl" PARENT_IMAGE)"
 enroot="$(hcl_value "$FLAVOR/gpu.hcl" ENROOT_VERSION)"
 pyxis="$(hcl_value "$FLAVOR/gpu.hcl" PYXIS_VERSION)"
 toolkit="$(hcl_value "$FLAVOR/gpu.hcl" NVIDIA_CONTAINER_TOOLKIT_VERSION)"
+clustermax_commit="$(hcl_value "$FLAVOR/gpu.hcl" CLUSTERMAX_COMMIT)"
+clustermax_licence="$(hcl_value "$FLAVOR/gpu.hcl" CLUSTERMAX_LICENSE_SHA256)"
 cuda_nvml="$(arg_default "$FLAVOR/Dockerfile" CUDA_NVML_DEVEL)"
 rocm_version="$(arg_default "$FLAVOR/Dockerfile" ROCM_VERSION)"
 rocm_smi="$(arg_default "$FLAVOR/Dockerfile" ROCM_SMI_LIB)"
 archive="slurm-${slurm_version//./-}-1"
 
-for v in slurm_version slurm_sha256 parent_image enroot pyxis toolkit cuda_nvml rocm_version rocm_smi; do
+for v in slurm_version slurm_sha256 parent_image enroot pyxis toolkit clustermax_commit clustermax_licence cuda_nvml rocm_version rocm_smi; do
 	if [[ -z ${!v} ]]; then
 		echo "release-notes.sh: could not read $v" >&2
 		exit 1
@@ -88,6 +90,7 @@ Tags \`${SLURM_TAG}\` and \`${SLURM_TAG%.*}-rockylinux9\` pointed at these index
 - **Build definition:** ${repo_url}/tree/${GITHUB_SHA}, \`schedmd/slurm/26.05/rockylinux9/\`. The provenance attestation on each image records the same commit and the build arguments.
 - **Base image:** \`${parent_image}\`. The attached \`*.tsv\` files list every RPM in each image, with its licence tag and source RPM. The source for Rocky Linux and EPEL packages is in those distributions' source repositories.
 - **enroot ${enroot}** and **pyxis ${pyxis}** (Apache-2.0) and **nvidia-container-toolkit ${toolkit}** (Apache-2.0; libnvidia-container links elfutils libelf, LGPL-3.0-or-later) are in \`slurmd_gpu_pyxis\` and \`login_gpu_pyxis\`.
+- **SemiAnalysisAI/ClusterMAX** (Apache-2.0) at commit \`${clustermax_commit}\` is in \`clustermax_audit\` under \`/opt/clustermax/\`: <https://github.com/SemiAnalysisAI/ClusterMAX/tree/${clustermax_commit}>. Its LICENSE, sha256 \`${clustermax_licence}\`, is at \`/usr/share/licenses/clustermax/LICENSE\`; the build checks the sha256.
 - Notices: ${repo_url}/blob/${GITHUB_SHA}/NOTICE-GPU.md
 
 ## Checks

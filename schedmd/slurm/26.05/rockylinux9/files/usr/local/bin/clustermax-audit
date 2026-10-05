@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
+# Runs the ClusterMAX audit in the current Slurm allocation and prints its
+# audit.values.json last. Exits with run.sh's exit code, or 1 when run.sh
+# succeeded without writing audit.values.json.
+
+set -euo pipefail
+
+if [[ -z ${SLURM_JOB_ID:-} ]]; then
+	echo "clustermax-audit runs as a Slurm step: salloc ... srun --overlap --container-image=<this image> --container-mounts=/run/slurm clustermax-audit" >&2
+	exit 2
+fi
+
+CLUSTERMAX_RUN="${CLUSTERMAX_RUN:-/opt/clustermax/cmax/scripts/1-audit/run.sh}"
+out="$(mktemp -d "${TMPDIR:-/tmp}/clustermax-audit.XXXXXX")"
+trap 'rm -rf "$out"' EXIT
+echo "clustermax-audit: results in ${out}, removed on exit"
+
+export RUN_RESULTS_DIR="$out"
+export CLUSTER_SLUG="${CLUSTER_SLUG:-${SLURM_CLUSTER_NAME:-slurm}}"
+export CLUSTERMAX_AUDIT_HARNESS=slurm
+
+# run.sh copies its output through a tee it starts itself; reading run.sh
+# through a pipe waits for that tee to finish, so the values print last.
+set +e
+"$CLUSTERMAX_RUN" | cat
+rc="${PIPESTATUS[0]}"
+set -e
+
+echo "===== audit.values.json ====="
+if [[ -s "$out/audit.values.json" ]]; then
+	cat "$out/audit.values.json"
+	echo
+else
+	echo "audit.values.json was not written (run.sh exited ${rc})"
+	if ((rc == 0)); then
+		rc=1
+	fi
+fi
+exit "$rc"

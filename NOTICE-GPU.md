@@ -2,11 +2,12 @@
 
 This repository is a fork of
 [SlinkyProject/containers](https://github.com/SlinkyProject/containers). It adds
-three images, built from `schedmd/slurm/26.05/rockylinux9/`:
+four images, built from `schedmd/slurm/26.05/rockylinux9/`:
 
 - `ghcr.io/baldwinspc/slinky-containers/slurmd_gpu`
 - `ghcr.io/baldwinspc/slinky-containers/slurmd_gpu_pyxis`
 - `ghcr.io/baldwinspc/slinky-containers/login_gpu_pyxis`
+- `ghcr.io/baldwinspc/slinky-containers/clustermax_audit`
 
 They are built and published from this repository by baldwinSPC, not by SchedMD.
 The first two are Slurm's `slurmd` with GPU autodetection. `gres.conf` can say
@@ -16,6 +17,9 @@ linux/amd64. The published `ghcr.io/slinkyproject/slurmd` images carry neither.
 with pyxis, so `srun --container-image` works from it and `srun --mpi=pmix`
 finds `mpi_pmix`. All three carry the NCCL runtime library, and in
 `login_gpu_pyxis` a login shell's `module avail` lists an `nccl` module for it.
+`clustermax_audit` is `login_gpu_pyxis` plus `jq`, `python3` and the audit
+scripts of SemiAnalysisAI/ClusterMAX, so the ClusterMAX Slurm audit runs as a
+Slurm step through pyxis. See [ClusterMAX](#clustermax) below.
 
 Every publish run creates a GitHub release that lists the image digests,
 attaches an SBOM of every package in each image, and attaches the Slurm source
@@ -23,7 +27,7 @@ archive the images were built from.
 
 ## Slurm
 
-All three images contain Slurm, Copyright (C) SchedMD LLC and the Slurm
+All four images contain Slurm, Copyright (C) SchedMD LLC and the Slurm
 contributors. It is licensed under the GNU General Public License, version 2 or
 later, with an exception permitting linking with OpenSSL. The images carry the
 licence at `/usr/share/licenses/slurm/` (`COPYING`, `DISCLAIMER`,
@@ -85,6 +89,27 @@ toolkit depend on, and the SBOM lists each of them. `login_gpu_pyxis` also
 carries what upstream's `sackd` and `login` stages install: kubectl from
 `pkgs.k8s.io` (Apache-2.0, the stable release at build time), OpenSSH and SSSD.
 
+## ClusterMAX
+
+`clustermax_audit` carries the tree of
+[SemiAnalysisAI/ClusterMAX](https://github.com/SemiAnalysisAI/ClusterMAX) at
+commit `1492ac5e4ac992ae436f062cc51a340d61672ca3` (branch `master`, 2026-09-30)
+under `/opt/clustermax/`, unmodified, and the wrapper
+`/usr/local/bin/clustermax-audit` from this repository, which runs the audit's
+`cmax/scripts/1-audit/run.sh` and prints its `audit.values.json` last.
+
+ClusterMAX is Copyright 2025 SemiAnalysis and licensed under the Apache License,
+Version 2.0. Its `LICENSE` was read at that commit: sha256
+`68aee1a6de2e8cf7b47c6e937709e049704efd2d4dd3671c4f037562d7f313dc`, the same
+file as at tag `v0.2.1`. The build refuses a tree whose `LICENSE` has any other
+checksum, and the image carries it at `/usr/share/licenses/clustermax/LICENSE`,
+with the commit in `COMMIT` beside it. ClusterMAX has no `NOTICE` file at that
+commit.
+
+The audit's Python scripts import only the standard library. The image does not
+install the `cmax` command-line package or its dependencies. `jq` (MIT) and
+`python3` (PSF-2.0) are Rocky Linux packages, listed in the SBOM with the rest.
+
 These are used at build time only and are not in the images:
 
 - **The NVML headers and link stub**, `cuda-nvml-devel-12-9` 12.9.79 from the
@@ -143,3 +168,4 @@ is in the source repositories of Rocky Linux
   the latest release at build time.
 - NCCL is in all three images, and `login_gpu_pyxis` has the `nccl` modulefile.
   Upstream's images have neither.
+- `clustermax_audit` has no counterpart upstream.
