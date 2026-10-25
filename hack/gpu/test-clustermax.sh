@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Checks what clustermax_audit adds to login_gpu_pyxis: jq and python3, the
+# Checks what clustermax_audit adds to login_gpu_pyxis: jq and python 3.11, the
 # ClusterMAX tree at the pinned commit with its audit entry point and Slurm
 # collector, ClusterMAX's LICENSE at the pinned sha256, the image's command, and
 # that the wrapper refuses to run outside a Slurm allocation. test-login.sh
@@ -133,7 +133,7 @@ echo "run as:   $IMAGE_REF ($PLATFORM)"
 tools="$(run_in "$IMAGE_REF" 'echo "jq: $(jq --version)"; echo "python3: $(python3 --version 2>&1)"')"
 echo "$tools" | sed 's/^/tools: /'
 check "tools/jq" "$tools" "jq: jq-1."
-check "tools/python3" "$tools" "python3: Python 3."
+check "tools/python3" "$tools" "python3: Python 3.11."
 
 tree="$(run_in "$IMAGE_REF" '
 	d=/opt/clustermax/cmax/scripts/1-audit
