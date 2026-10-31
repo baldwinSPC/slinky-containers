@@ -48,8 +48,10 @@ case "\$*" in
 	fi
 	if [[ -n \${NO_PYTHON:-} ]]; then
 		echo "python3: bash: line 1: python3: command not found"
+	elif [[ -n \${OLD_PYTHON:-} ]]; then
+		echo "python3: Python 3.9.25"
 	else
-		echo "python3: Python 3.9.21"
+		echo "python3: Python 3.11.13"
 	fi
 	;;
 *"run.sh"*)
@@ -115,6 +117,7 @@ case_() {
 case_ "an image with everything" ""
 case_ "jq is missing" "tools/jq" NO_JQ=1
 case_ "python3 is missing" "tools/python3" NO_PYTHON=1
+case_ "python3 is 3.9, older than the audit needs" "tools/python3" OLD_PYTHON=1
 case_ "run.sh is missing" "clustermax/tree" NO_RUN=1
 case_ "the tree is another commit" "clustermax/commit" OTHER_COMMIT=1
 case_ "the LICENSE differs" "licence/clustermax" OTHER_LICENCE=1

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # SPDX-License-Identifier: Apache-2.0
 #
-# clustermax_audit: login_gpu_pyxis plus jq, python3 and the audit scripts of
+# clustermax_audit: login_gpu_pyxis plus jq, python 3.11 and the audit scripts of
 # SemiAnalysisAI/ClusterMAX at a pinned commit, run as a Slurm step through
 # pyxis:
 #   salloc ... srun --overlap --container-image=<this image> \
@@ -41,12 +41,19 @@ fi
 EOR
 
 RUN --mount=type=cache,target=/var/cache/dnf,sharing=locked <<EOR
-# Install the audit's tools
+# Install the audit's tools. The audit's checks need python 3.10 or later and
+# the image's python3 is 3.9, which dnf itself runs on, so python3.11 goes in
+# its own directory ahead of it on PATH.
 set -xeuo pipefail
-dnf -q -y install --setopt='install_weak_deps=False' jq python3
+dnf -q -y install --setopt='install_weak_deps=False' jq python3.11
+mkdir -p /opt/clustermax-python/bin
+ln -s /usr/bin/python3.11 /opt/clustermax-python/bin/python3
+ln -s /usr/bin/python3.11 /opt/clustermax-python/bin/python
 jq --version
-python3 --version
+PATH=/opt/clustermax-python/bin:${PATH} python3 --version
 EOR
+
+ENV PATH="/opt/clustermax-python/bin:${PATH}"
 
 ADD --keep-git-dir=false "https://github.com/SemiAnalysisAI/ClusterMAX.git#${CLUSTERMAX_COMMIT}" /opt/clustermax/
 COPY files/usr/local/bin/clustermax-audit /usr/local/bin/clustermax-audit
@@ -65,6 +72,28 @@ if [[ -f /opt/clustermax/NOTICE ]]; then
 fi
 echo "${CLUSTERMAX_COMMIT}" >/usr/share/licenses/clustermax/COMMIT
 chmod 0755 /usr/local/bin/clustermax-audit
+EOR
+
+RUN <<EOR
+# Import every check with the image's python
+set -euo pipefail
+python3 - <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+if sys.version_info < (3, 10):
+    sys.exit(f"python {sys.version.split()[0]} is older than 3.10")
+root = pathlib.Path("/opt/clustermax/cmax/scripts/1-audit/checks")
+files = sorted(root.rglob("*.py"))
+if not files:
+    sys.exit(f"no checks found under {root}")
+for f in files:
+    spec = importlib.util.spec_from_file_location("check_" + f.stem.replace("-", "_"), f)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    print("imported", f)
+PY
 EOR
 
 ENV CLUSTERMAX_COMMIT="${CLUSTERMAX_COMMIT}"
